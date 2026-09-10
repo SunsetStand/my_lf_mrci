@@ -1,7 +1,8 @@
 import numpy as np
-from pyscf import lib
+
+# from pyscf import lib
 # from pyscf import ao2mo
-from pyscf.fci import cistring
+# from pyscf.fci import cistring
 # from pyscf.fci import rdm
 # from pyscf.fci.direct_spin1 import _unpack_nelec
 
@@ -34,26 +35,28 @@ from pyscf.fci import cistring
 # def  contract_all():
 
 def alpha_to_g(alpha, omega):
-    assert alpha >= 0 and omega > 0, "alpha and omega must be positive"
+    if alpha < 0 or omega <= 0:
+        raise ValueError("alpha should be non-negative and omega should be positive")
     return (alpha * omega)**(0.5)
 
 def encode(occupations, d):
-    assert d > 0, "d must be positive"
+    if d <= 0 or isinstance(d, (int, np.integer)) == False:
+        raise ValueError("d must be positive and an integer")
     for i in occupations:
-        assert i >= 0, "occupations must be non-negative"
+        if i < 0 or i >= d or isinstance(i, (int, np.integer)) == False:
+            raise ValueError("occupation must be less than d, non-negative and an integer")
     p = 0
     for i in occupations:
         p = p * d + i
     return p
 
 def electron_ring_hopping(L, t = -1.0):
+    if L < 3 or isinstance(L, (int,np.integer)) == False:
+        raise ValueError("L must be an integer greater than 2")
     Ht = np.zeros((L,L))
-    for i, j in range(L):
-        if i == (j-1)%L or i == (j+1)%L:
-            Ht[i,j] = t
+    for i in range(L):
+        for j in range(L):
+            if i == (j-1)%L or i == (j+1)%L:
+                Ht[i,j] = t
     return Ht
-
-
-
-
 
