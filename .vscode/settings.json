@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "/home/enovo/.venvs/mr_lf/bin/python",
+  "python.terminal.activateEnvironment": true
+}
