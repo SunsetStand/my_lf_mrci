@@ -50,6 +50,20 @@ def encode(occupations, d):
         p = p * d + i
     return p
 
+def decode(p, L, d):
+    if d <= 0 or isinstance(d, (int, np.integer)) == False:
+        raise ValueError("d must be positive and an integer")
+    if L <= 0 or isinstance(L, (int, np.integer)) == False:
+        raise ValueError("L must be positive and an integer")
+    if p < 0 or p >= d**L or isinstance(p, (int, np.integer)) == False:
+        raise ValueError("p must be less than d**L, non-negative and an integer")
+    occupations = ()
+    for i in range(L):
+        occupations = (p%d,) + occupations
+        p = p // d
+    return occupations
+
+
 def electron_ring_hopping(L, t = -1.0):
     if L < 3 or isinstance(L, (int,np.integer)) == False:
         raise ValueError("L must be an integer greater than 2")
