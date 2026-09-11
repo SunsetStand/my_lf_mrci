@@ -125,6 +125,25 @@ def make_shape(L, nelec, Nmax):
     d = Nmax + 1
     return (num_strings_a, num_strings_b) + (d,) * L
 
+def contract_1e(tmat: np.ndarray, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    psi_shape = make_shape(L,nelec,Nmax)
+    if not isinstance(tmat, np.ndarray) or tmat.shape != (L, L):
+        raise ValueError("tmat must be a NumPy array with shape (L, L)")
+
+    if not isinstance(psi_site, np.ndarray) or psi_site.shape != psi_shape:
+        raise ValueError("psi_site has an incompatible shape")
+    new_psi = np.zeros(psi_shape)
+    neleca, nelecb = nelec
+    _, links_a = make_electron_basis(L, neleca)
+    _, links_b = make_electron_basis(L, nelecb)
+    for str0, tab in enumerate(links_a):
+        for a, i, str1, sign in tab:
+            new_psi[str1] += sign * tmat[a,i] * psi_site[str0]
+    for str0, tab in enumerate(links_b):
+        for a, i, str1, sign in tab:
+            new_psi[:, str1] += sign * tmat[a,i] * psi_site[:, str0]
+    return new_psi
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
