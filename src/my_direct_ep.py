@@ -85,3 +85,16 @@ def phonon_configs(L, Nmax):
     for p in range(P):
         configs[p] = decode(p,L,d)
     return configs
+
+def boson_operators(Nmax):
+    if Nmax < 0 or isinstance(Nmax, (int, np.integer)) == False:
+        raise ValueError("Nmax must be non-negative and an integer")
+    d = Nmax + 1
+    b = np.zeros((d,d), dtype = np.float64)
+    for i in range(d):
+        for j in range(d):
+            if i == j-1:
+                b[i,j] = np.sqrt(j)
+    bdag = b.conj().T
+    number = bdag @ b
+    return b,bdag,number
