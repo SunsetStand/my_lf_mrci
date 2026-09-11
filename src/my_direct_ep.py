@@ -2,7 +2,8 @@ import numpy as np
 
 # from pyscf import lib
 # from pyscf import ao2mo
-# from pyscf.fci import cistring
+from pyscf.fci import cistring
+
 # from pyscf.fci import rdm
 # from pyscf.fci.direct_spin1 import _unpack_nelec
 
@@ -98,3 +99,23 @@ def boson_operators(Nmax):
     bdag = b.conj().T
     number = bdag @ b
     return b,bdag,number
+
+def make_electron_basis(L,N):
+    if N < 0 or N > L or isinstance(N, (int,np.integer)) == False:
+        raise ValueError("N must be non-negative, no greater than L and an integer")
+    if L <= 0 or L>=64 or isinstance(L, (int,np.integer)) == False:
+        raise ValueError("L must be positive, less than 64 and an integer")
+    strings = cistring.make_strings(range(L), N)
+    links = cistring.gen_linkstr_index(range(L),N,strings)
+    return strings, links
+
+if __name__ == "__main__":
+    strings, links = make_electron_basis(4,2)
+    print("源地址 源占据 a i 目标地址 目标占据 sign")
+    for source, string in enumerate(strings):
+        source_bits = format(int(string),"04b")
+
+        for a, i, target, sign in links[source]:
+            target_bits = format(int(strings[target]),"04b")
+
+            print(f"{source:6d} {source_bits} {a:2d} {i:2d} {target:8d} {target_bits} {sign:+d}")
