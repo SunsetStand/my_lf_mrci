@@ -74,3 +74,14 @@ def electron_ring_hopping(L, t = -1.0):
                 Ht[i,j] = t
     return Ht
 
+def phonon_configs(L, Nmax):
+    if L <= 0 or isinstance(L, (int, np.integer)) == False:
+        raise ValueError("L must be positive and an integer")
+    if Nmax < 0 or isinstance(Nmax, (int, np.integer)) == False:
+        raise ValueError("Nmax must be non-negative and an integer")
+    d = Nmax +1
+    P = d**L
+    configs = np.zeros((P,L), dtype = np.int64)
+    for p in range(P):
+        configs[p] = decode(p,L,d)
+    return configs
