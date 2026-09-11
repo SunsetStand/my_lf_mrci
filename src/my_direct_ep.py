@@ -109,6 +109,22 @@ def make_electron_basis(L,N):
     links = cistring.gen_linkstr_index(range(L),N,strings)
     return strings, links
 
+def make_shape(L, nelec, Nmax):
+    if L <= 0 or L>=64 or isinstance(L, (int,np.integer)) == False:
+        raise ValueError("L must be positive, less than 64 and an integer")    
+    if isinstance(nelec,tuple) == False or len(nelec)!=2:
+        raise ValueError("nelec must be a tuple of 2 elements")
+    for n in nelec:
+        if n<0 or n > L or isinstance(n, (int,np.integer)) == False:
+            raise ValueError("nelec must be a tuple of integer between 0 and L")
+    if Nmax < 0 or isinstance(Nmax, (int, np.integer)) == False:
+        raise ValueError("Nmax must be non-negative and an integer")
+    neleca, nelecb = nelec
+    num_strings_a = cistring.num_strings(L,neleca)
+    num_strings_b = cistring.num_strings(L,nelecb)
+    d = Nmax + 1
+    return (num_strings_a, num_strings_b) + (d,) * L
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
