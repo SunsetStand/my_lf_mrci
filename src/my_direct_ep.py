@@ -159,6 +159,29 @@ def contract_2e_hubbard(U: float, psi_site: np.ndarray, L: int, nelec: tuple[int
             new_psi[ia,ib] = U * int(str_a & str_b).bit_count() * psi_site[ia,ib]
     return new_psi
 
+def contract_pp(hpp: np.ndarray, psi_site: np.ndarray, L:int, nelec: tuple[int,int], Nmax: int):
+    psi_shape = make_shape(L,nelec,Nmax)
+    if not isinstance(psi_site, np.ndarray) or psi_site.shape != psi_shape:
+        raise ValueError("psi_site has an incompatible shape")
+    if not isinstance(hpp, np.ndarray) or not hpp.shape == (L,L):
+        raise ValueError("hpp has an incompatible shape")
+    if (
+    not np.issubdtype(hpp.dtype, np.number)
+    or np.iscomplexobj(hpp)
+    or not np.all(np.isfinite(hpp))
+    ):
+        raise ValueError("hpp must contain finite real numbers")
+    hpp_off_diagonal = hpp - np.diag(np.diag(hpp))
+    if not np.allclose(hpp_off_diagonal, 0.0):
+        raise ValueError("hpp must be diagonal")
+    omega = np.diag(hpp)
+    configs = phonon_configs(L,Nmax)
+    d = Nmax + 1
+    phonon_energies = configs @ omega
+    energy_tensor = phonon_energies.reshape((1,1)+(d,)*L)
+    new_psi = energy_tensor * psi_site
+    return new_psi
+    
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
