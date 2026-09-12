@@ -144,6 +144,21 @@ def contract_1e(tmat: np.ndarray, psi_site: np.ndarray, L: int, nelec: tuple[int
             new_psi[:, str1] += sign * tmat[a,i] * psi_site[:, str0]
     return new_psi
 
+def contract_2e_hubbard(U: float, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    psi_shape = make_shape(L,nelec,Nmax)
+    if not isinstance(psi_site, np.ndarray) or psi_site.shape != psi_shape:
+        raise ValueError("psi_site has an incompatible shape")
+    if not isinstance(U, (int, float, np.integer, np.floating)) or not np.isfinite(U):
+        raise ValueError("U must be a finite real number")
+    new_psi = np.zeros(psi_shape)
+    neleca, nelecb = nelec
+    strs_a, _ = make_electron_basis(L,neleca)
+    strs_b, _ = make_electron_basis(L,nelecb)
+    for ia, str_a in enumerate(strs_a):
+        for ib, str_b in enumerate(strs_b):
+            new_psi[ia,ib] = U * int(str_a & str_b).bit_count() * psi_site[ia,ib]
+    return new_psi
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
