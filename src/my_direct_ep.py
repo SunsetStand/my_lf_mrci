@@ -1,9 +1,8 @@
 import numpy as np
-
-# from pyscf import lib
-# from pyscf import ao2mo
+from pyscf import lib
 from pyscf.fci import cistring
 
+# from pyscf import ao2mo
 # from pyscf.fci import rdm
 # from pyscf.fci.direct_spin1 import _unpack_nelec
 
@@ -258,6 +257,27 @@ def make_hdiag(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, ne
     Et = np.einsum('abs,s->ab', occupation_site, t_diag)
     hdiag_tensor = U * double_occ.reshape((num_a,num_b) + (1,) * L) + phonon_energies.reshape((1,1)+(d,)*L) + Et.reshape((num_a,num_b)+(1,)*L)
     return hdiag_tensor.reshape(-1)
+
+def kernel(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int, tol: float = 1e-12,
+           max_cycle: int = 100, max_space: int = 20, verbose: int = 0):
+    psi_shape = make_shape(L,nelec,Nmax)
+    D = int(np.prod(psi_shape))
+
+    def hop(vector):
+        psi_site = vector.reshape(psi_shape)
+        hpsi_site = contract_all(tmat, U, g, hpp, psi_site, L, nelec, Nmax)
+        return hpsi_site.reshape(-1)
+
+    hdiag = make_hdiag(tmat, U, g, hpp, L, nelec, Nmax)
+    guess_address = int(np.argmin(hdiag))
+    x0 = np.zeros(D, dtype=np.float64)
+    x0[guess_address] = 1.0
+    precond = lib.make_diag_precond(hdiag)
+    energy, vec = lib.davidson(hop, x0, precond, tol=tol, max_cycle=max_cycle, max_space=max_space, verbose=verbose)
+    residual = hop(vec) - energy * vec
+    residual_norm = np.linalg.norm(residual)
+    vec = vec.reshape(psi_shape)
+    return float(energy), vec, float(residual_norm)
 
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
