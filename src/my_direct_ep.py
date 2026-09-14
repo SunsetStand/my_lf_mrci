@@ -111,7 +111,7 @@ def make_electron_basis(L,N):
 
 def make_shape(L, nelec, Nmax):
     if L <= 0 or L>=64 or isinstance(L, (int,np.integer)) == False:
-        raise ValueError("L must be positive, less than 64 and an integer")    
+        raise ValueError("L must be positive, less than 64 and an integer")
     if isinstance(nelec,tuple) == False or len(nelec)!=2:
         raise ValueError("nelec must be a tuple of 2 elements")
     for n in nelec:
@@ -181,7 +181,38 @@ def contract_pp(hpp: np.ndarray, psi_site: np.ndarray, L:int, nelec: tuple[int,i
     energy_tensor = phonon_energies.reshape((1,1)+(d,)*L)
     new_psi = energy_tensor * psi_site
     return new_psi
-    
+
+def contract_ep_paper(g: float, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    if isinstance(g, (bool,np.bool_)) or not isinstance(g, (int, float, np.integer, np.floating)) or not np.isfinite(g):
+        raise ValueError("g must be finite real scalar")
+    psi_shape = make_shape(L,nelec,Nmax)
+    if psi_site.shape != psi_shape:
+        raise ValueError("psi_site has the wrong shape")
+    nelec_a, nelec_b = nelec
+    strs_a, _ = make_electron_basis(L,nelec_a)
+    strs_b, _ = make_electron_basis(L,nelec_b)
+    num_a = len(strs_a)
+    num_b = len(strs_b)
+    occupation_site = np.zeros((num_a,num_b,L))
+    for ia in range(num_a):
+        for ib in range(num_b):
+            for site in range(L):
+                occupation_site[ia,ib,site] = bool(strs_a[ia] & (1<<site)) + bool(strs_b[ib] & (1<<site))
+    b, bdag, _ = boson_operators(Nmax)
+    x_local = b + bdag
+    out_dtype = np.result_type(psi_site.dtype, x_local.dtype, g)
+    new_psi = np.zeros(psi_shape, dtype=out_dtype)
+    for site in range(L):
+        occupation = occupation_site[:,:,site]
+        occupation_tensor = occupation.reshape((num_a,num_b)+(1,)*L)
+        weighted_psi = occupation_tensor * psi_site
+        phonon_axis = 2 + site
+        weighted_moved = np.moveaxis(weighted_psi, phonon_axis, -1)
+        acted_moved = np.einsum('mn,...n->...m', x_local, weighted_moved)
+        acted = np.moveaxis(acted_moved, -1, phonon_axis)
+        new_psi += g * acted
+    return new_psi
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
