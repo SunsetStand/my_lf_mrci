@@ -213,6 +213,16 @@ def contract_ep_paper(g: float, psi_site: np.ndarray, L: int, nelec: tuple[int,i
         new_psi += g * acted
     return new_psi
 
+def contract_all(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    psi_shape = make_shape(L,nelec,Nmax)
+    if not isinstance(psi_site, np.ndarray) or psi_site.shape != psi_shape:
+        raise ValueError("psi_site has an incompatible shape")
+    new_psi = contract_1e(tmat, psi_site, L, nelec, Nmax)
+    new_psi += contract_2e_hubbard(U, psi_site, L, nelec, Nmax)
+    new_psi += contract_pp(hpp, psi_site, L, nelec, Nmax)
+    new_psi += contract_ep_paper(g, psi_site, L, nelec, Nmax)
+    return new_psi
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
