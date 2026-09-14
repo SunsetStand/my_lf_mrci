@@ -20,6 +20,10 @@ above if a previous workspace selection overrides the default setting.
 The student's initial `src/my_direct_ep.py` contains an unused NumPy import;
 the full Ruff check may report F401 until that import is used.
 
-Tests cover environment imports, cistring enumeration/link semantics and a
-headless plot. They do not validate any Hubbard–Holstein model implementation.
+Tests cover the environment, basis conventions, Hubbard–Holstein contractions,
+tiny independent dense references, Davidson solves, scans, and headless plots.
 The private `_unpack_nelec` helper is probed only for compatibility.
+
+Current learning material: `docs/cs_lf_theory_stage.md`.  The Fig. 2d script
+`scripts/exact_fig2d_probe.py` is deliberately a finite-cutoff diagnostic, not
+a converged reproduction of the published strong-coupling curve.

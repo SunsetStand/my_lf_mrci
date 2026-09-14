@@ -259,7 +259,8 @@ def make_hdiag(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, ne
     return hdiag_tensor.reshape(-1)
 
 def kernel(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int, tol: float = 1e-12,
-           max_cycle: int = 100, max_space: int = 20, verbose: int = 0):
+           max_cycle: int = 100, max_space: int = 20, verbose: int = 0,
+           tol_residual: float | None = None, lindep: float = 1e-14):
     psi_shape = make_shape(L,nelec,Nmax)
     D = int(np.prod(psi_shape))
 
@@ -273,7 +274,22 @@ def kernel(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec:
     x0 = np.zeros(D, dtype=np.float64)
     x0[guess_address] = 1.0
     precond = lib.make_diag_precond(hdiag)
-    energy, vec = lib.davidson(hop, x0, precond, tol=tol, max_cycle=max_cycle, max_space=max_space, verbose=verbose)
+    def hop_many(vectors):
+        return [hop(vector) for vector in vectors]
+
+    _, energies, vectors = lib.davidson1(
+        hop_many,
+        [x0],
+        precond,
+        tol=tol,
+        tol_residual=tol_residual,
+        lindep=lindep,
+        max_cycle=max_cycle,
+        max_space=max_space,
+        verbose=verbose,
+    )
+    energy = energies[0]
+    vec = vectors[0]
     residual = hop(vec) - energy * vec
     residual_norm = np.linalg.norm(residual)
     vec = vec.reshape(psi_shape)
