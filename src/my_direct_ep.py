@@ -223,6 +223,42 @@ def contract_all(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, psi_site
     new_psi += contract_ep_paper(g, psi_site, L, nelec, Nmax)
     return new_psi
 
+def make_hdiag(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    if not isinstance(tmat, np.ndarray) or tmat.shape != (L, L):
+        raise ValueError("tmat must be a NumPy array with shape (L, L)")
+    if not isinstance(hpp, np.ndarray) or not hpp.shape == (L,L):
+        raise ValueError("hpp has an incompatible shape")
+    if (
+    not np.issubdtype(hpp.dtype, np.number)
+    or np.iscomplexobj(hpp)
+    or not np.all(np.isfinite(hpp))
+    ):
+        raise ValueError("hpp must contain finite real numbers")
+    hpp_off_diagonal = hpp - np.diag(np.diag(hpp))
+    if not np.allclose(hpp_off_diagonal, 0.0):
+        raise ValueError("hpp must be diagonal")
+    omega = np.diag(hpp)
+    configs = phonon_configs(L,Nmax)
+    d = Nmax + 1
+    phonon_energies = configs @ omega
+    strs_a, _ = make_electron_basis(L,nelec[0])
+    strs_b, _ = make_electron_basis(L,nelec[1])
+    num_a = len(strs_a)
+    num_b = len(strs_b)
+    occupation_site = np.zeros((num_a,num_b,L))
+    for ia in range(num_a):
+        for ib in range(num_b):
+            for site in range(L):
+                occupation_site[ia,ib,site] = bool(strs_a[ia] & (1<<site)) + bool(strs_b[ib] & (1<<site))
+    double_occ = np.zeros((num_a,num_b))
+    for ia, str_a in enumerate(strs_a):
+        for ib, str_b in enumerate(strs_b):
+            double_occ[ia,ib] = int(str_a & str_b).bit_count()
+    t_diag = np.diag(tmat)
+    Et = np.einsum('abs,s->ab', occupation_site, t_diag)
+    hdiag_tensor = U * double_occ.reshape((num_a,num_b) + (1,) * L) + phonon_energies.reshape((1,1)+(d,)*L) + Et.reshape((num_a,num_b)+(1,)*L)
+    return hdiag_tensor.reshape(-1)
+
 if __name__ == "__main__":
     strings, links = make_electron_basis(4,2)
     print("源地址 源占据 a i 目标地址 目标占据 sign")
