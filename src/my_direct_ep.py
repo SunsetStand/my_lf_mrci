@@ -212,14 +212,52 @@ def contract_ep_paper(g: float, psi_site: np.ndarray, L: int, nelec: tuple[int,i
         new_psi += g * acted
     return new_psi
 
-def contract_all(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+def contract_ep_centered(g: float, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
+    if isinstance(g, (bool,np.bool_)) or not isinstance(g, (int, float, np.integer, np.floating)) or not np.isfinite(g):
+        raise ValueError("g must be finite real scalar")
+    psi_shape = make_shape(L,nelec,Nmax)
+    if psi_site.shape != psi_shape:
+        raise ValueError("psi_site has the wrong shape")
+    nelec_a, nelec_b = nelec
+    strs_a, _ = make_electron_basis(L,nelec_a)
+    strs_b, _ = make_electron_basis(L,nelec_b)
+    num_a = len(strs_a)
+    num_b = len(strs_b)
+    occupation_site = np.zeros((num_a,num_b,L))
+    average_occupation = (nelec_a + nelec_b) / L
+    for ia in range(num_a):
+        for ib in range(num_b):
+            for site in range(L):
+                occupation_site[ia,ib,site] = bool(strs_a[ia] & (1<<site)) + bool(strs_b[ib] & (1<<site))
+    ocp_centered = occupation_site - average_occupation
+    b, bdag, _ = boson_operators(Nmax)
+    x_local = b + bdag
+    out_dtype = np.result_type(psi_site.dtype, x_local.dtype, g)
+    new_psi = np.zeros(psi_shape, dtype=out_dtype)
+    for site in range(L):
+        occupation = ocp_centered[:,:,site]
+        occupation_tensor = occupation.reshape((num_a,num_b)+(1,)*L)
+        weighted_psi = occupation_tensor * psi_site
+        phonon_axis = 2 + site
+        weighted_moved = np.moveaxis(weighted_psi, phonon_axis, -1)
+        acted_moved = np.einsum('mn,...n->...m', x_local, weighted_moved)
+        acted = np.moveaxis(acted_moved, -1, phonon_axis)
+        new_psi += g * acted
+    return new_psi
+
+def contract_all(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, psi_site: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int, coupling_convention="paper"):
     psi_shape = make_shape(L,nelec,Nmax)
     if not isinstance(psi_site, np.ndarray) or psi_site.shape != psi_shape:
         raise ValueError("psi_site has an incompatible shape")
+    if coupling_convention not in ["paper", "centered"]:
+        raise ValueError("coupling_convention must be either 'paper' or 'centered'")
     new_psi = contract_1e(tmat, psi_site, L, nelec, Nmax)
     new_psi += contract_2e_hubbard(U, psi_site, L, nelec, Nmax)
     new_psi += contract_pp(hpp, psi_site, L, nelec, Nmax)
-    new_psi += contract_ep_paper(g, psi_site, L, nelec, Nmax)
+    if coupling_convention == "paper":
+        new_psi += contract_ep_paper(g, psi_site, L, nelec, Nmax)
+    else:
+        new_psi += contract_ep_centered(g, psi_site, L, nelec, Nmax)
     return new_psi
 
 def make_hdiag(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int):
@@ -260,13 +298,13 @@ def make_hdiag(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, ne
 
 def kernel(tmat: np.ndarray, U: float, g: float, hpp: np.ndarray, L: int, nelec: tuple[int,int], Nmax: int, tol: float = 1e-12,
            max_cycle: int = 100, max_space: int = 20, verbose: int = 0,
-           tol_residual: float | None = None, lindep: float = 1e-14):
+           tol_residual: float | None = None, lindep: float = 1e-14, coupling_convention: str = "paper"):
     psi_shape = make_shape(L,nelec,Nmax)
     D = int(np.prod(psi_shape))
 
     def hop(vector):
         psi_site = vector.reshape(psi_shape)
-        hpsi_site = contract_all(tmat, U, g, hpp, psi_site, L, nelec, Nmax)
+        hpsi_site = contract_all(tmat, U, g, hpp, psi_site, L, nelec, Nmax, coupling_convention)
         return hpsi_site.reshape(-1)
 
     hdiag = make_hdiag(tmat, U, g, hpp, L, nelec, Nmax)

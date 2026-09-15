@@ -1,0 +1,108 @@
+{
+  "L": 4,
+  "nelec": [
+    2,
+    2
+  ],
+  "U": 4.0,
+  "omega": 0.5,
+  "alpha": 4.0,
+  "g": 1.4142135623730951,
+  "Nmax": 16,
+  "D": 3006756,
+  "convention": "paper_uncentered",
+  "solver": "scipy.eigsh",
+  "energy": -19.685094977708214,
+  "independent_residual": 1.0800062353736997e-10,
+  "student_residual": 1.080006101129654e-10,
+  "operator_errors": {
+    "kinetic": 2.4830376199058683e-16,
+    "hubbard": 0.0,
+    "phonon": 0.0,
+    "ep_uncentered": 2.0773686614786467e-15,
+    "pyscf_uncentered_all": 3.287410029931884e-15,
+    "student_all": 3.143281037996285e-15,
+    "hdiag": 0.0,
+    "hermiticity_bilinear": 3.972516759986888e-16
+  },
+  "atomic_bounds": [
+    {
+      "Nmax": 8,
+      "local_energies": [
+        0.0,
+        -3.6359643009224403,
+        -9.849064664646425
+      ],
+      "atomic_energy": -14.543857203689761,
+      "atomic_error": 9.456142796310239,
+      "full_energy_lower_bound": -18.54385720368976
+    },
+    {
+      "Nmax": 12,
+      "local_energies": [
+        0.0,
+        -3.9214262510564373,
+        -11.786123605205375
+      ],
+      "atomic_energy": -15.685705004225749,
+      "atomic_error": 8.314294995774251,
+      "full_energy_lower_bound": -19.68570500422575
+    },
+    {
+      "Nmax": 16,
+      "local_energies": [
+        0.0,
+        -3.9914195985571905,
+        -13.123284411111957
+      ],
+      "atomic_energy": -18.246568822223914,
+      "atomic_error": 5.753431177776086,
+      "full_energy_lower_bound": -22.246568822223914
+    },
+    {
+      "Nmax": 24,
+      "local_energies": [
+        0.0,
+        -3.999993276377369,
+        -14.758864837942529
+      ],
+      "atomic_energy": -21.517729675885057,
+      "atomic_error": 2.4822703241149426,
+      "full_energy_lower_bound": -25.517729675885057
+    },
+    {
+      "Nmax": 32,
+      "local_energies": [
+        0.0,
+        -3.9999999996981286,
+        -15.569987487952083
+      ],
+      "atomic_energy": -23.139974975904167,
+      "atomic_error": 0.8600250240958331,
+      "full_energy_lower_bound": -27.139974975904167
+    },
+    {
+      "Nmax": 48,
+      "local_energies": [
+        0.0,
+        -3.9999999999999982,
+        -15.991162342708591
+      ],
+      "atomic_energy": -23.982324685417183,
+      "atomic_error": 0.017675314582817236,
+      "full_energy_lower_bound": -27.982324685417183
+    },
+    {
+      "Nmax": 64,
+      "local_energies": [
+        0.0,
+        -4.0,
+        -15.99999832493146
+      ],
+      "atomic_energy": -23.99999664986292,
+      "atomic_error": 3.3501370815258724e-06,
+      "full_energy_lower_bound": -27.99999664986292
+    }
+  ],
+  "elapsed_seconds": 61.47999738499993
+}
