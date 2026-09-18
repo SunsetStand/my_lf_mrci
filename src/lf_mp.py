@@ -1,6 +1,7 @@
 """Lang--Firsov mean-field reference and perturbative corrections."""
 
 import numpy as np
+from scipy import optimize as scipy_optimize
 
 from .cs_mp import cs_site_density
 
@@ -163,3 +164,194 @@ def lf_energy(
     boson_constant = omega * np.dot(shift, shift)
     total_energy = electronic_energy + boson_constant
     return float(total_energy)
+
+
+def lf_hf_local_state(
+    params: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+) -> tuple[float, np.ndarray, float]:
+    """Evaluate the local-diagonal one-electron LF-HF ground state.
+
+    Parameters
+    ----------
+    params
+        Packed real parameters ``[ell[0:L], shift[0:L]]`` with shape
+        ``(2 * norb,)``.  The conditional displacement is restricted to
+        ``lam = diag(ell)``.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+
+    Returns
+    -------
+    total_energy
+        LF-HF total energy including the global ``omega * shift @ shift``.
+    coeff
+        Normalized lowest eigenvector of the effective Hamiltonian, shape
+        ``(norb,)``.
+    orbital_energy
+        Lowest eigenvalue of the effective Hamiltonian, excluding the global
+        boson constant.
+    """
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    norb = tmat.shape[0]
+    if params.ndim != 1 or params.size != 2 * norb:
+        raise ValueError("Parameter array must be 1-dimensional and of length 2*norb.")
+    ell = params[:norb]
+    shift = params[norb:]
+    lam = np.diag(ell)
+    heff = lf_effective_one_body(tmat, g, omega, shift, lam)
+    eigvals, eigvecs = np.linalg.eigh(heff)
+    orbital_energy = eigvals[0]
+    coeff = eigvecs[:, 0]
+    total_energy = omega * shift @ shift + orbital_energy
+    return float(total_energy), coeff, float(orbital_energy)
+
+
+def lf_hf_local_optimize(
+    params0: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    *,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> scipy_optimize.OptimizeResult:
+    """Optimize a one-electron local-diagonal LF-HF reference.
+
+    The packed parameters have the order ``[ell[0:L], shift[0:L]]``, where
+    ``lam = diag(ell)``.  A BFGS minimization with a three-point numerical
+    gradient is applied to :func:`lf_hf_local_state`.
+
+    Parameters
+    ----------
+    params0
+        Finite real initial parameters with shape ``(2 * norb,)``.  The
+        input array is not modified.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+    gtol
+        Positive gradient-norm tolerance passed to BFGS.
+    max_cycle
+        Positive maximum number of BFGS iterations.
+
+    Returns
+    -------
+    scipy.optimize.OptimizeResult
+        The BFGS result augmented with ``coeff``, ``orbital_energy``, and
+        ``shift_residual``.  Its ``fun`` field is recomputed from the final
+        parameters, and ``shift_residual`` is the infinity norm of the
+        coherent-shift stationarity equation.
+    """
+    if params0.ndim != 1:
+        raise ValueError("Initial parameter array must be 1-dimensional.")
+    for param in params0:
+        if not np.isfinite(param) or not np.isreal(param):
+            raise ValueError("Initial parameter array must contain finite real values.")
+    if gtol <= 0:
+        raise ValueError("Gradient tolerance must be positive.")
+    if max_cycle <= 0:
+        raise ValueError("Maximum cycle count must be positive.")
+    x0 = np.asarray(params0, dtype=np.float64, copy=True)
+    lf_hf_local_state(x0, tmat, g, omega)
+
+    def cost(params: np.ndarray) -> float:
+        return lf_hf_local_state(params, tmat, g, omega)[0]
+
+    result = scipy_optimize.minimize(
+        cost,
+        x0,
+        method="BFGS",
+        jac="3-point",
+        options={"gtol": gtol, "maxiter": max_cycle, "disp": False},
+    )
+    final_energy, final_coeff, final_orbital_energy = lf_hf_local_state(result.x, tmat, g, omega)
+    norb = tmat.shape[0]
+    ell = result.x[:norb]
+    shift = result.x[norb:]
+    lam = np.diag(ell)
+    stationary_shift = lf_stationary_shift(final_coeff, lam, g, omega)
+    shift_residual = float(np.max(np.abs(shift - stationary_shift)))
+    result["coeff"] = final_coeff
+    result["orbital_energy"] = final_orbital_energy
+    result["shift_residual"] = shift_residual
+    result["fun"] = final_energy
+    return result
+
+
+def lf_hf_local_multistart(
+    params0s: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    *,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> tuple[
+    scipy_optimize.OptimizeResult,
+    list[scipy_optimize.OptimizeResult],
+]:
+    """Optimize local-diagonal LF-HF from several explicit starting points.
+
+    Parameters
+    ----------
+    params0s
+        Finite real initial parameters with shape
+        ``(nstart, 2 * norb)`` and ``nstart >= 1``.  Each row uses the
+        packing ``[ell[0:L], shift[0:L]]`` and the array is not modified.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+    gtol
+        Positive gradient-norm tolerance passed to every optimization.
+    max_cycle
+        Positive maximum number of BFGS iterations per starting point.
+
+    Returns
+    -------
+    best
+        Lowest-energy successful result.  Ties preserve the input order.
+    results
+        All optimization results in the same order as ``params0s``.
+
+    Raises
+    ------
+    RuntimeError
+        If none of the starting points converges successfully.
+    """
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    if params0s.ndim != 2:
+        raise ValueError("Initial parameter array must be 2-dimensional with shape (nstart, 2*norb).")
+    norb = tmat.shape[0]
+    nstart = params0s.shape[0]
+    if params0s.shape[0] == 0:
+        raise ValueError("Initial parameter array must have at least one starting point.")
+    if params0s.shape[1] != 2 * norb:
+        raise ValueError("Initial parameter array must have shape (nstart, 2*norb).")
+    for i in range(nstart):
+        for param in params0s[i]:
+            if not np.isfinite(param) or not np.isreal(param):
+                raise ValueError(f"Initial parameter array at index {i} must contain finite real values.")
+    results = []
+    for i in range(nstart):
+        result = lf_hf_local_optimize(params0s[i], tmat, g, omega, gtol=gtol, max_cycle=max_cycle)
+        results.append(result)
+    successful_results = [res for res in results if res.success]
+    if not successful_results:
+        raise RuntimeError("All optimization attempts failed.")
+    best = min(successful_results, key=lambda res: res.fun)
+    return best, results
