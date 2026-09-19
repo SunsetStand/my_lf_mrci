@@ -24,6 +24,18 @@ Tests cover the environment, basis conventions, Hubbard–Holstein contractions,
 tiny independent dense references, Davidson solves, scans, and headless plots.
 The private `_unpack_nelec` helper is probed only for compatibility.
 
+Run the reproducible CS-HF/LF-HF part of the Fig. 2b scan and plot with:
+
+```bash
+python -m scripts.fig2b_hf_scan
+python -m scripts.plot_fig2b_hf
+```
+
+The scan uses ``alpha = 0.0, 0.2, ..., 3.0`` and writes
+`data/fig2b_hf.csv`, `figures/fig2b_hf.png`, and
+`figures/fig2b_hf.pdf`.  The CSV includes all four site densities and the
+optimization diagnostics needed to audit the LF-HF symmetry breaking.
+
 Current learning material: `docs/cs_lf_theory_stage.md`.  The Fig. 2d script
 `scripts/exact_fig2d_probe.py` is deliberately a finite-cutoff diagnostic, not
 a converged reproduction of the published strong-coupling curve.
