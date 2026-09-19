@@ -355,3 +355,134 @@ def lf_hf_local_multistart(
         raise RuntimeError("All optimization attempts failed.")
     best = min(successful_results, key=lambda res: res.fun)
     return best, results
+
+
+def lf_hf_local_initial_guesses(
+    norb: int,
+    g: float,
+    omega: float,
+    *,
+    nrandom: int = 8,
+    random_scale: float = 0.5,
+    seed: int = 0,
+) -> np.ndarray:
+    """Generate reproducible CS-centered starts for local LF-HF.
+
+    The first row is the uniform CS point with ``ell = 0`` and
+    ``shift = -g / (omega * norb)``.  Every remaining row is an independent
+    Gaussian perturbation of that point in the packed parameter order
+    ``[ell[0:L], shift[0:L]]``.
+
+    Parameters
+    ----------
+    norb
+        Positive number of electronic sites/orbitals.
+    g
+        Finite real electron--phonon coupling strength.
+    omega
+        Finite positive phonon frequency.
+    nrandom
+        Nonnegative number of random starts in addition to the CS point.
+    random_scale
+        Finite positive standard deviation of every parameter perturbation.
+    seed
+        Seed passed to an independent :class:`numpy.random.Generator`.
+
+    Returns
+    -------
+    numpy.ndarray
+        Initial parameters with shape ``(1 + nrandom, 2 * norb)`` and
+        ``float64`` dtype.  Row zero is exactly the CS point.
+    """
+    if not isinstance(norb, (int, np.integer)) or isinstance(norb, (bool, np.bool_)) or norb <= 0:
+        raise ValueError("Number of orbitals must be a positive integer.")
+    if not isinstance(nrandom, (int, np.integer)) or isinstance(nrandom, (bool, np.bool_)) or nrandom < 0:
+        raise ValueError("Number of random guesses must be a non-negative integer.")
+    if not np.isfinite(g) or not np.isreal(g):
+        raise ValueError("Electron-phonon coupling g must be finite and real.")
+    if not np.isfinite(omega) or not np.isreal(omega) or omega <= 0:
+        raise ValueError("Phonon frequency omega must be finite, real, and positive.")
+    if not np.isfinite(random_scale) or not np.isreal(random_scale) or random_scale <= 0:
+        raise ValueError("Random scale must be finite, real, and positive.")
+    params0s = np.zeros((nrandom + 1, 2 * norb), dtype=np.float64)
+    params0s[0, norb:] = - g / (omega * norb)
+    rng = np.random.default_rng(seed)
+    for i in range(1, nrandom + 1):
+        params0s[i, :norb] = rng.normal(loc=0.0, scale=random_scale, size=norb)
+        params0s[i, norb:] = rng.normal(loc=- g / (omega * norb), scale=random_scale, size=norb)
+    return params0s
+
+
+def lf_hf_local_alpha_point(
+    alpha: float,
+    tmat: np.ndarray,
+    omega: float,
+    *,
+    nrandom: int = 8,
+    random_scale: float = 0.5,
+    seed: int = 0,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> tuple[
+    scipy_optimize.OptimizeResult,
+    list[scipy_optimize.OptimizeResult],
+]:
+    """Solve and diagnose one coupling point of local LF-HF.
+
+    The dimensionless coupling is converted according to
+    ``g = sqrt(alpha * omega)``.  Reproducible CS-centered starting points
+    are optimized independently, and the lowest-energy successful result is
+    augmented with its site density and density imbalance.
+
+    Parameters
+    ----------
+    alpha
+        Finite nonnegative coupling ``g**2 / omega``.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    omega
+        Finite positive phonon frequency.
+    nrandom
+        Number of random starts in addition to the exact CS starting point.
+    random_scale
+        Standard deviation of the Gaussian starting-point perturbations.
+    seed
+        Seed used to generate the random starting points.
+    gtol
+        Gradient-norm tolerance passed to every local optimization.
+    max_cycle
+        Maximum number of BFGS iterations per starting point.
+
+    Returns
+    -------
+    best
+        Lowest-energy successful result, augmented with ``alpha``, ``g``,
+        ``density``, ``density_imbalance``, ``nstart``, and ``nconverged``.
+    results
+        All local optimization results in starting-point order.  ``best`` is
+        the same object as one entry of this list.
+    """
+    if not np.isfinite(alpha) or not np.isreal(alpha) or alpha < 0:
+        raise ValueError("Alpha must be finite, real, and non-negative.")
+    if not np.isfinite(omega) or not np.isreal(omega) or omega <= 0:
+        raise ValueError("Phonon frequency omega must be finite, real, and positive.")
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    g = float(np.sqrt(alpha * omega))
+    params0s = lf_hf_local_initial_guesses(
+        tmat.shape[0],
+        g,
+        omega,
+        nrandom=nrandom,
+        random_scale=random_scale,
+        seed=seed,
+    )
+    best, results = lf_hf_local_multistart(params0s, tmat, g, omega, gtol=gtol, max_cycle=max_cycle)
+    density = cs_site_density(best["coeff"])
+    best["alpha"] = float(alpha)
+    best["g"] = float(g)
+    best["density"] = density
+    best["density_imbalance"] = float(np.max(density) - np.min(density))
+    best["nstart"] = len(results)
+    best["nconverged"] = sum(bool(res.success) for res in results)
+    return best, results
