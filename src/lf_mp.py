@@ -1,9 +1,52 @@
 """Lang--Firsov mean-field reference and perturbative corrections."""
 
+import math
+
 import numpy as np
 from scipy import optimize as scipy_optimize
 
 from .cs_mp import cs_site_density
+
+
+def lf_total_phonon_configurations(nmode: int, max_total: int) -> np.ndarray:
+    """Enumerate non-vacuum configurations under a total-phonon cutoff.
+
+    Parameters
+    ----------
+    nmode
+        Positive number of phonon modes.
+    max_total
+        Positive inclusive cutoff on ``sum_x occupations[k, x]``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Nonnegative integer occupations with shape ``(nconfig, nmode)``.
+        The vacuum is excluded.  Rows are ordered first by increasing total
+        occupation and then lexicographically within each total.  Every row
+        satisfies ``1 <= occupations[k].sum() <= max_total``.
+
+    Notes
+    -----
+    This is a collective total-phonon cutoff.  It differs from the exact-ED
+    tensor-product convention that independently permits ``0..Nmax`` on
+    every mode.  The number of returned rows is
+    ``comb(max_total + nmode, nmode) - 1``.
+    """
+    if not isinstance(nmode, (int, np.integer)) or isinstance(nmode, (bool, np.bool_)):
+        raise TypeError("Number of modes must be a integer.")
+    if nmode <= 0:
+        raise ValueError("Number of modes must be positive.")
+    if not isinstance(max_total, (int, np.integer)) or isinstance(max_total, (bool, np.bool_)):
+        raise TypeError("Maximum total occupation must be a integer.")
+    if max_total <= 0:
+        raise ValueError("Maximum total occupation must be positive.")
+    occupations = []
+    for total in range(1, max_total + 1):
+        for config in np.ndindex(*(total + 1,) * nmode):
+            if sum(config) == total:
+                occupations.append(config)
+    return np.array(occupations, dtype=np.int64)
 
 
 def lf_franck_condon(lam: np.ndarray) -> np.ndarray:
@@ -30,6 +73,231 @@ def lf_franck_condon(lam: np.ndarray) -> np.ndarray:
             delta = lam[:, p] - lam[:, q]
             S[p, q] = np.exp(-0.5 * np.sum(delta**2))
     return S
+
+
+def lf_displacement_vacuum_amplitudes(
+    lam: np.ndarray,
+    occupations: np.ndarray,
+) -> np.ndarray:
+    """Evaluate vacuum-to-number-state LF displacement amplitudes.
+
+    For the hopping operator ``a_p^dagger a_q``, define the displacement
+    vector ``delta[x, p, q] = lam[x, p] - lam[x, q]``.  This function
+    evaluates
+
+    ``<X| exp(sum_x delta[x,p,q] * (b_x^dagger-b_x)) |0>``
+
+    for every supplied multimode occupation vector ``X``.
+
+    Parameters
+    ----------
+    lam
+        Finite real LF parameters with shape ``(nmode, norb)`` and index
+        order ``lam[x, p]``.
+    occupations
+        Nonnegative integer phonon occupations with shape
+        ``(nconfig, nmode)`` and index order ``occupations[k, x]``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Real amplitudes with shape ``(nconfig, norb, norb)`` and index
+        order ``[k, p, q]``.  Configuration ``k`` represents
+        ``|X_k> = |n_0, n_1, ...>``.  Odd total phonon occupations retain
+        the sign of the displacement components.
+    """
+    if lam.ndim != 2:
+        raise ValueError("LF parameter array must be 2-dimensional.")
+    for lam_value in lam.flat:
+        if not np.isfinite(lam_value) or not np.isreal(lam_value):
+            raise ValueError("LF parameter array must contain finite real values.")
+    if occupations.ndim != 2:
+        raise ValueError("Occupation array must be 2-dimensional.")
+    nmode, norb = lam.shape
+    if occupations.shape[1] != nmode:
+        raise ValueError("Occupation array second dimension must match LF parameter first dimension.")
+    for occ_value in occupations.flat:
+        if not np.issubdtype(type(occ_value), np.integer) or occ_value < 0:
+            raise ValueError("Occupation array must contain non-negative integers.")
+    delta = lam[:, :, None] - lam[:, None, :]
+    Gpq = np.exp(-0.5 * np.sum(delta**2, axis=0))
+    amplitudes = np.empty((occupations.shape[0], norb, norb), dtype=np.float64)
+    for k in range(occupations.shape[0]):
+        one = np.ones((norb, norb), dtype=np.float64)
+        for x in range(nmode):
+            n = occupations[k, x]
+            if n > 0:
+                one *= delta[x]**n / np.sqrt(math.factorial(int(n)))
+        amplitudes[k] = Gpq * one
+    return amplitudes
+
+
+def lf_vacuum_coupling_site_matrices(
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    shift: np.ndarray,
+    lam: np.ndarray,
+    occupations: np.ndarray,
+) -> np.ndarray:
+    """Build non-vacuum LF fluctuation couplings in the site basis.
+
+    For every non-vacuum phonon configuration ``X_k``, construct the
+    one-electron matrix
+
+    ``W[k, p, q] = <X_k, p| V |0, q>``.
+
+    Its hopping contribution is ``tmat[p, q]`` times the corresponding
+    vacuum-to-number-state displacement amplitude.  A configuration with
+    exactly one phonon in mode ``x`` additionally receives the diagonal
+    residual coupling
+
+    ``omega * shift[x] + g * delta[x, p] - omega * lam[x, p]``.
+
+    Parameters
+    ----------
+    tmat
+        Finite Hermitian site-basis hopping matrix with shape
+        ``(norb, norb)``.
+    g
+        Finite real local Holstein coupling strength.
+    omega
+        Finite positive phonon frequency shared by all modes.
+    shift
+        Finite real coherent displacements with shape ``(nmode,)`` and
+        index order ``shift[x]``.
+    lam
+        Finite real LF parameters with shape ``(nmode, norb)`` and index
+        order ``lam[x, p]``.  This local Holstein specialization requires
+        ``nmode == norb``.
+    occupations
+        Nonnegative integer configurations with shape ``(nconfig, nmode)``.
+        Every row must have a strictly positive total occupation.
+
+    Returns
+    -------
+    numpy.ndarray
+        Site-basis coupling matrices with shape ``(nconfig, norb, norb)``
+        and index order ``[k, p, q]``.  The dtype preserves a complex
+        ``tmat``.  A matrix for fixed ``X_k`` need not be Hermitian.
+
+    Notes
+    -----
+    Vacuum configurations are rejected because the zero-phonon block also
+    contains static LF terms and the zeroth-order Fock subtraction.  For
+    non-vacuum configurations those terms have zero matrix element, so the
+    returned matrix is directly the required fluctuation coupling.
+    """
+    if lam.ndim != 2 or lam.shape[0] != lam.shape[1]:
+        raise ValueError("LF parameter array must be 2-dimensional and square.")
+    norb = lam.shape[1]
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1] or tmat.shape[0] != norb or not np.allclose(tmat, tmat.conj().T):
+        raise ValueError("Hopping matrix must be 2-dimensional, square, and Hermitian.")
+    for tmat_value in tmat.flat:
+        if not np.isfinite(tmat_value):
+            raise ValueError("Hopping matrix must contain finite values.")
+    if shift.ndim != 1 or shift.size != norb:
+        raise ValueError("Shift array must be 1-dimensional and match LF parameter first dimension.")
+    for shift_value in shift.flat:
+        if not np.isfinite(shift_value) or not np.isreal(shift_value):
+            raise ValueError("Shift array must contain finite real values.")
+    if occupations.ndim != 2 or occupations.shape[1] != norb:
+        raise ValueError("Occupation array must be 2-dimensional with second dimension matching LF parameter first dimension.")
+    for occ_value in occupations.flat:
+        if not np.issubdtype(type(occ_value), np.integer) or occ_value < 0:
+            raise ValueError("Occupation array must contain non-negative integers.")
+    if np.any(np.sum(occupations, axis=1) == 0):
+        raise ValueError("Occupation array must not contain vacuum configurations.")
+    if omega <= 0 or not np.isfinite(omega) or not np.isreal(omega):
+        raise ValueError("Frequency omega must be positive.")
+    if not np.isfinite(g) or not np.isreal(g):
+        raise ValueError("Coupling g must be finite and real.")
+    amplitudes = lf_displacement_vacuum_amplitudes(lam, occupations)
+    W = np.empty((occupations.shape[0], norb, norb), dtype=np.result_type(tmat, np.float64))
+    for k in range(occupations.shape[0]):
+        W[k] = tmat * amplitudes[k]
+        if np.sum(occupations[k]) == 1:
+            x = np.argmax(occupations[k])
+            residual = np.empty(norb, dtype=np.float64)
+            for p in range(norb):
+                residual[p] = omega * shift[x] + g * (1 if p == x else 0) - omega * lam[x, p]
+            W[k] += np.diag(residual)
+    return W
+
+
+def lf_vacuum_coupling_mo_elements(
+    site_couplings: np.ndarray,
+    mo_coeff: np.ndarray,
+    nocc: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Transform non-vacuum LF couplings and extract MP2 channels.
+
+    Each site-basis matrix is transformed with the same orthonormal canonical
+    MO coefficients according to ``W_mo[k] = C.conj().T @ W_site[k] @ C``.
+    Occupied MOs must precede virtual MOs.  For the one-body operator, the
+    unchanged-determinant amplitude is the occupied trace, while the
+    determinant-single amplitude is ``W_mo[k, a, i]``.
+
+    Parameters
+    ----------
+    site_couplings
+        Non-vacuum site-basis matrices with shape
+        ``(nconfig, nsite, nsite)`` and index order ``[k, p, q]``.
+        A matrix for fixed configuration need not be Hermitian.
+    mo_coeff
+        Finite square unitary canonical-MO coefficient matrix with shape
+        ``(nsite, nmo)`` and index order ``[p, m]``.  Columns are MOs and
+        ``nsite == nmo`` for the complete site basis used here.
+    nocc
+        Number of occupied MOs, satisfying ``1 <= nocc < nmo``.  The Fig. 2b
+        one-electron problem uses ``nocc = 1``.
+
+    Returns
+    -------
+    mo_couplings
+        All transformed matrices with shape ``(nconfig, nmo, nmo)`` and
+        index order ``[k, m, n]``.
+    pure_phonon
+        Unchanged-determinant amplitudes
+        ``sum_i W_mo[k, i, i]`` with shape ``(nconfig,)``.
+    singles
+        Single-excitation amplitudes ``W_mo[k, a, i]`` with shape
+        ``(nconfig, nocc, nvir)`` and index order ``[k, i, a]``.  The local
+        virtual index ``a`` corresponds to global MO index ``nocc + a``.
+
+    Notes
+    -----
+    The returned occupied trace is the complete pure-phonon electronic
+    matrix element for the one-electron Fig. 2b problem.  Additional
+    many-electron LF two-body terms would need separate treatment.
+    """
+    if site_couplings.ndim != 3:
+        raise ValueError("Site-basis coupling array must be 3-dimensional.")
+    for site_value in site_couplings.flat:
+        if not np.isfinite(site_value):
+            raise ValueError("Site-basis coupling array must contain finite values.")
+    nconfig, nsite, nsite2 = site_couplings.shape
+    if nsite != nsite2:
+        raise ValueError("Site-basis coupling matrices must be square.")
+    if mo_coeff.ndim != 2 or mo_coeff.shape[0] != mo_coeff.shape[1] or mo_coeff.shape[0] != nsite:
+        raise ValueError("MO coefficient array must be square and match site-basis size.")
+    for mo_value in mo_coeff.flat:
+        if not np.isfinite(mo_value):
+            raise ValueError("MO coefficient array must contain finite values.")
+    nmo = mo_coeff.shape[1]
+    if not isinstance(nocc, (int, np.integer)) or isinstance(nocc, (bool, np.bool_)):
+        raise TypeError("Number of occupied MOs must be a positive integer.")
+    if not (1 <= nocc < nmo):
+        raise ValueError("Number of occupied MOs must satisfy 1 <= nocc < nmo.")
+    C = mo_coeff
+    if not np.allclose(C.conj().T @ C, np.eye(nmo)):
+        raise ValueError("MO coefficient array must be unitary.")
+    W_mo = np.empty((nconfig, nmo, nmo), dtype=np.result_type(site_couplings, np.complex128))
+    for k in range(nconfig):
+        W_mo[k] = C.conj().T @ site_couplings[k] @ C
+    pure_phonon = np.array([np.trace(W_mo[k, :nocc, :nocc]) for k in range(nconfig)], dtype=np.complex128)
+    singles = W_mo[:, nocc:, :nocc].transpose(0, 2, 1)
+    return W_mo, pure_phonon, singles
 
 
 def lf_stationary_shift(
@@ -114,7 +382,7 @@ def lf_effective_one_body(
         raise ValueError("Frequency omega must be positive.")
     norb = tmat.shape[0]
     overlap = lf_franck_condon(lam)
-    diagonal_correction = np.ndarray(norb)
+    diagonal_correction = np.zeros(norb)
     for p in range(norb):
         phonon_part = omega * np.sum(lam[:, p]**2 - 2 * shift * lam[:, p])
         coupling_part = 2 * g * (shift[p] - lam[p, p])
@@ -486,3 +754,53 @@ def lf_hf_local_alpha_point(
     best["nstart"] = len(results)
     best["nconverged"] = sum(bool(res.success) for res in results)
     return best, results
+
+
+def lf_hf_full_state(
+    lam: np.ndarray,
+    shift: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+) -> tuple[float, np.ndarray, float]:
+    """Evaluate a one-electron LF-HF state for a full LF parameter matrix.
+
+    Parameters
+    ----------
+    lam
+        Real conditional displacements with shape ``(nmode, norb)`` and
+        index order ``lam[x, p]``.  The local Holstein model has one phonon
+        mode per electronic site and therefore uses shape ``(L, L)``.
+    shift
+        Real coherent displacements ``z[x]`` with shape ``(nmode,)``.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Real local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+
+    Returns
+    -------
+    total_energy
+        LF-HF total energy including the global boson contribution
+        ``omega * shift @ shift``.
+    coeff
+        Normalized lowest eigenvector of the zero-phonon effective
+        one-electron Hamiltonian, with shape ``(norb,)``.
+    orbital_energy
+        Lowest eigenvalue of the effective one-electron Hamiltonian before
+        adding the global boson contribution.
+
+    Notes
+    -----
+    For one electron the simultaneous row shift
+    ``lam[x, p] -> lam[x, p] + c[x]`` and ``shift[x] -> shift[x] + c[x]``
+    leaves the total energy and electronic density invariant.
+    """
+    heff = lf_effective_one_body(tmat, g, omega, shift, lam)
+    eigvals, eigvecs = np.linalg.eigh(heff)
+    orbital_energy = eigvals[0]
+    coeff = eigvecs[:, 0]
+    total_energy = omega * shift @ shift + orbital_energy
+    return float(total_energy), coeff, float(orbital_energy)
