@@ -9,6 +9,8 @@ EXPECTED_KEYS = {
     "alpha",
     "g",
     "cs_energy",
+    "cs_mp2_correction",
+    "cs_mp2_energy",
     "cs_density",
     "cs_density_imbalance",
     "cs_niter",
@@ -35,7 +37,21 @@ def test_real_scan_recovers_cs_line_and_lf_symmetry_breaking():
         -2.0 - alpha_values / 4.0,
         atol=1e-14,
     )
+    np.testing.assert_allclose(
+        [record["cs_mp2_correction"] for record in records],
+        -23.0 * alpha_values / 180.0,
+        atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        [record["cs_mp2_energy"] for record in records],
+        -2.0 - 17.0 * alpha_values / 45.0,
+        atol=1e-14,
+    )
     for record in records:
+        assert record["cs_mp2_energy"] == pytest.approx(
+            record["cs_energy"] + record["cs_mp2_correction"],
+            abs=1e-14,
+        )
         assert record["lf_energy"] <= record["cs_energy"] + 1e-12
         assert record["cs_density"].shape == (4,)
         assert record["lf_density"].shape == (4,)

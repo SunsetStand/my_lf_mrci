@@ -1,4 +1,4 @@
-"""Plot the CS-HF and local LF-HF parts of the Fig. 2b reproduction."""
+"""Plot exact, CS-HF, CS-MP2, and local LF-HF results for Fig. 2b."""
 
 import csv
 from pathlib import Path
@@ -6,14 +6,18 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from scripts.fig2b_hf_scan import DEFAULT_CSV_PATH
+from scripts.fig2b_hf_scan import DEFAULT_CSV_PATH as DEFAULT_HF_CSV_PATH
+from scripts.plot_fig2b_exact import DEFAULT_CSV_PATH as DEFAULT_EXACT_CSV_PATH
+from scripts.plot_fig2b_exact import read_exact_csv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PNG_PATH = PROJECT_ROOT / "figures" / "fig2b_hf.png"
 DEFAULT_PDF_PATH = PROJECT_ROOT / "figures" / "fig2b_hf.pdf"
 
 
-def read_hf_csv(csv_path: str | Path = DEFAULT_CSV_PATH) -> tuple[dict[str, np.ndarray], dict[str, str]]:
+def read_hf_csv(
+    csv_path: str | Path = DEFAULT_HF_CSV_PATH,
+) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     """Read and sort the HF scan while preserving all four site densities."""
     with Path(csv_path).open(newline="", encoding="utf-8") as csv_file:
         rows = list(csv.DictReader(csv_file))
@@ -23,6 +27,8 @@ def read_hf_csv(csv_path: str | Path = DEFAULT_CSV_PATH) -> tuple[dict[str, np.n
     required = {
         "alpha",
         "cs_energy",
+        "cs_mp2_correction",
+        "cs_mp2_energy",
         "lf_energy",
         "cs_density_imbalance",
         "lf_density_imbalance",
@@ -37,6 +43,12 @@ def read_hf_csv(csv_path: str | Path = DEFAULT_CSV_PATH) -> tuple[dict[str, np.n
     data = {
         "alpha": np.array([float(row["alpha"]) for row in rows]),
         "cs_energy": np.array([float(row["cs_energy"]) for row in rows]),
+        "cs_mp2_correction": np.array(
+            [float(row["cs_mp2_correction"]) for row in rows]
+        ),
+        "cs_mp2_energy": np.array(
+            [float(row["cs_mp2_energy"]) for row in rows]
+        ),
         "lf_energy": np.array([float(row["lf_energy"]) for row in rows]),
         "cs_density": np.array(
             [[float(row[f"cs_n{site}"]) for site in range(4)] for row in rows]
@@ -55,12 +67,19 @@ def read_hf_csv(csv_path: str | Path = DEFAULT_CSV_PATH) -> tuple[dict[str, np.n
 
 
 def plot_hf(
-    csv_path: str | Path = DEFAULT_CSV_PATH,
+    csv_path: str | Path = DEFAULT_HF_CSV_PATH,
     png_path: str | Path = DEFAULT_PNG_PATH,
     pdf_path: str | Path = DEFAULT_PDF_PATH,
+    exact_csv_path: str | Path = DEFAULT_EXACT_CSV_PATH,
 ) -> tuple[Path, Path]:
-    """Create energy and density-imbalance panels from an HF scan CSV."""
+    """Plot exact and HF energies together with the HF density imbalance."""
     data, metadata = read_hf_csv(csv_path)
+    exact_alpha, exact_energy, exact_metadata = read_exact_csv(exact_csv_path)
+    if (
+        int(exact_metadata["L"]) != int(metadata["L"])
+        or not np.isclose(float(exact_metadata["omega"]), float(metadata["omega"]))
+    ):
+        raise ValueError("exact and HF CSV files describe different models")
     png_path = Path(png_path)
     pdf_path = Path(pdf_path)
     png_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,12 +94,33 @@ def plot_hf(
         constrained_layout=True,
     )
     energy_ax.plot(
+        exact_alpha,
+        exact_energy,
+        color="tab:purple",
+        linewidth=1.4,
+        marker="s",
+        markerfacecolor="none",
+        markersize=4.0,
+        label="Exact ED",
+    )
+    energy_ax.plot(
         data["alpha"],
         data["cs_energy"],
         linestyle="--",
         color="tab:blue",
         linewidth=1.4,
         label="CS-HF (symmetric)",
+    )
+    energy_ax.plot(
+        data["alpha"],
+        data["cs_mp2_energy"],
+        linestyle=":",
+        color="tab:green",
+        linewidth=1.7,
+        marker="^",
+        markerfacecolor="none",
+        markersize=4.5,
+        label="CS-MP2",
     )
     energy_ax.plot(
         data["alpha"],

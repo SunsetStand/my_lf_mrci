@@ -1,4 +1,4 @@
-"""Scan the CS-HF and local LF-HF branches needed for Fig. 2b."""
+"""Scan the CS-HF, CS-MP2, and local LF-HF branches needed for Fig. 2b."""
 
 import csv
 from pathlib import Path
@@ -25,6 +25,8 @@ CSV_COLUMNS = (
     "cs_branch",
     "lf_ansatz",
     "cs_energy",
+    "cs_mp2_correction",
+    "cs_mp2_energy",
     "cs_n0",
     "cs_n1",
     "cs_n2",
@@ -74,6 +76,8 @@ def _csv_row(
         "cs_branch": "uniform_symmetric",
         "lf_ansatz": "local_diagonal",
         "cs_energy": f"{record['cs_energy']:.16g}",
+        "cs_mp2_correction": f"{record['cs_mp2_correction']:.16g}",
+        "cs_mp2_energy": f"{record['cs_mp2_energy']:.16g}",
         "cs_n0": f"{cs_density[0]:.16g}",
         "cs_n1": f"{cs_density[1]:.16g}",
         "cs_n2": f"{cs_density[2]:.16g}",
@@ -103,7 +107,7 @@ def run_hf_scan(
     max_cycle: int = 500,
     csv_path: str | Path | None = None,
 ) -> list[dict[str, object]]:
-    """Evaluate CS-HF and local LF-HF in the supplied coupling order.
+    """Evaluate CS-HF, CS-MP2, and local LF-HF in the supplied coupling order.
 
     This experiment-level driver fixes the Fig. 2b model parameters to a
     four-site ring with ``t=-1`` and ``omega=0.5``.  CS-HF is initialized on
@@ -160,7 +164,7 @@ def run_hf_scan(
         csv_path = Path(csv_path)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         csv_file = csv_path.open("w", newline="", encoding="utf-8")
-        writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS, lineterminator="\n")
         writer.writeheader()
         csv_file.flush()
 
@@ -169,23 +173,23 @@ def run_hf_scan(
         for alpha in alpha_values:
             alpha = float(alpha)
             g = float(my_direct_ep.alpha_to_g(alpha, omega))
-            (
-                cs_energy,
-                cs_coeff,
-                _,
-                cs_converged,
-                cs_niter,
-                cs_density_residual,
-            ) = cs_mp.cs_hf_scf(
-                tmat,
-                g,
-                omega,
-                cs_coeff0,
-                conv_tol=gtol,
-                max_cycle=max_cycle,
-            )
-            if not cs_converged:
-                raise RuntimeError(f"CS-HF failed to converge for alpha={alpha}, g={g}")
+            try:
+                cs_result = cs_mp.cs_mp2_point(
+                    tmat,
+                    g,
+                    omega,
+                    cs_coeff0,
+                    conv_tol=gtol,
+                    max_cycle=max_cycle,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"CS-HF failed to converge for alpha={alpha}, g={g}"
+                ) from exc
+            cs_energy = float(cs_result["hf_energy"])
+            cs_coeff = np.asarray(cs_result["coeff"])
+            cs_niter = int(cs_result["niter"])
+            cs_density_residual = float(cs_result["density_residual"])
             cs_density = cs_mp.cs_site_density(cs_coeff)
             cs_density_imbalance = float(np.max(cs_density) - np.min(cs_density))
             best, _ = lf_mp.lf_hf_local_alpha_point(
@@ -201,7 +205,9 @@ def run_hf_scan(
             record = {
                 "alpha": alpha,
                 "g": g,
-                "cs_energy": float(cs_energy),
+                "cs_energy": cs_energy,
+                "cs_mp2_correction": float(cs_result["mp2_correction"]),
+                "cs_mp2_energy": float(cs_result["total_energy"]),
                 "cs_density": cs_density.copy(),
                 "cs_density_imbalance": cs_density_imbalance,
                 "cs_niter": cs_niter,

@@ -40,6 +40,16 @@ def test_scan_writes_auditable_csv_and_reader_sorts_rows(tmp_path):
     data, metadata = read_hf_csv(csv_path)
     np.testing.assert_array_equal(data["alpha"], [0.0, 0.4])
     np.testing.assert_allclose(data["cs_energy"], [-2.0, -2.1], atol=1e-14)
+    np.testing.assert_allclose(
+        data["cs_mp2_correction"],
+        [0.0, -23.0 * 0.4 / 180.0],
+        atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        data["cs_mp2_energy"],
+        [-2.0, -2.0 - 17.0 * 0.4 / 45.0],
+        atol=1e-14,
+    )
     assert data["cs_density"].shape == (2, 4)
     assert data["lf_density"].shape == (2, 4)
     np.testing.assert_allclose(np.sum(data["lf_density"], axis=1), 1.0, atol=1e-14)
@@ -49,10 +59,15 @@ def test_scan_writes_auditable_csv_and_reader_sorts_rows(tmp_path):
 def test_plot_creates_nonempty_png_and_pdf(tmp_path):
     csv_path = tmp_path / "fig2b_hf.csv"
     scan.run_hf_scan(np.array([0.0, 0.4]), nrandom=0, csv_path=csv_path)
+    exact_csv_path = tmp_path / "fig2b_exact.csv"
+    exact_csv_path.write_text(
+        "alpha,energy,L,omega\n0,-2,4,0.5\n0.4,-2.15,4,0.5\n",
+        encoding="utf-8",
+    )
     png_path = tmp_path / "figures" / "fig2b_hf.png"
     pdf_path = tmp_path / "figures" / "fig2b_hf.pdf"
 
-    returned = plot_hf(csv_path, png_path, pdf_path)
+    returned = plot_hf(csv_path, png_path, pdf_path, exact_csv_path)
 
     assert returned == (png_path, pdf_path)
     assert png_path.stat().st_size > 0
