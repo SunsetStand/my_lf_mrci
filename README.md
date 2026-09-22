@@ -31,7 +31,10 @@ python -m scripts.fig2b_hf_scan
 python -m scripts.plot_fig2b_hf
 ```
 
-The scan uses ``alpha = 0.0, 0.2, ..., 3.0`` and writes
+The scan uses ``alpha = 0.0, 0.2, ..., 3.0`` and the paper's full
+density-diagonal LF parameters ``lam[x, p]``.  Each LF-HF point includes a
+coherent-state start, one localized start per site, and reproducible uniform
+random starts.  It writes
 `data/fig2b_hf.csv`, `figures/fig2b_hf.png`, and
 `figures/fig2b_hf.pdf`.  The CSV includes all four site densities and the
 optimization diagnostics needed to audit the LF-HF symmetry breaking, along

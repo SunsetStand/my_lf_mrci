@@ -625,6 +625,70 @@ def lf_hf_local_multistart(
     return best, results
 
 
+def lf_hf_full_multistart(
+    mu0s: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    *,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> tuple[
+    scipy_optimize.OptimizeResult,
+    list[scipy_optimize.OptimizeResult],
+]:
+    """Optimize full-matrix one-electron LF-HF from explicit starts.
+
+    Parameters
+    ----------
+    mu0s
+        Finite real gauge-fixed displacements with shape
+        ``(nstart, norb, norb)`` and index order ``[start, x, p]``.  At
+        least one start is required, and the input array is not modified.
+    tmat
+        Square site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+    gtol
+        Positive gradient-norm tolerance passed to every optimization.
+    max_cycle
+        Positive maximum number of BFGS iterations per starting point.
+
+    Returns
+    -------
+    best
+        Lowest-energy result among the optimizations for which
+        ``result.success`` is true.  This is the same object as one entry
+        in ``results``.
+    results
+        Optimization results in the same order as the supplied starts.
+
+    Raises
+    ------
+    RuntimeError
+        If every optimization reports failure.
+    """
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    if mu0s.ndim != 3 or mu0s.shape[0] < 1 or mu0s.shape[1:] != tmat.shape:
+        raise ValueError("Initial parameter array must be 3-dimensional with shape (nstart, norb, norb).")
+    nstart = mu0s.shape[0]
+    for mu in mu0s:
+        if not np.all(np.isfinite(mu)) or not np.all(np.isreal(mu)):
+            raise ValueError("Initial parameter array must contain finite real values.")
+    results = []
+    for k in range(nstart):
+        result = lf_hf_full_optimize(mu0s[k], tmat, g, omega, gtol=gtol, max_cycle=max_cycle)
+        results.append(result)
+    successful_results = [res for res in results if res.success]
+    if not successful_results:
+        raise RuntimeError("All optimization attempts failed.")
+    best = min(successful_results, key=lambda res: res.fun)
+    return best, results
+
+
 def lf_hf_local_initial_guesses(
     norb: int,
     g: float,
@@ -679,6 +743,74 @@ def lf_hf_local_initial_guesses(
         params0s[i, :norb] = rng.normal(loc=0.0, scale=random_scale, size=norb)
         params0s[i, norb:] = rng.normal(loc=- g / (omega * norb), scale=random_scale, size=norb)
     return params0s
+
+
+def lf_hf_full_initial_guesses(
+    norb: int,
+    g: float,
+    omega: float,
+    *,
+    nrandom: int = 8,
+    random_scale: float = 0.5,
+    seed: int = 0,
+) -> np.ndarray:
+    """Generate reproducible non-Gaussian starts for full-matrix LF-HF.
+
+    The optimized variable is the gauge-fixed displacement
+    ``mu[x, p] = lam[x, p] - shift[x]`` with ``shift = 0``.  Starts are
+    returned in a fixed order: the coherent-state point, one localized
+    polaron point for every site, and uniformly distributed perturbations
+    around the coherent-state point.
+
+    Parameters
+    ----------
+    norb
+        Positive number of electronic sites/orbitals.  The local Holstein
+        model has the same number of phonon modes.
+    g
+        Finite real electron--phonon coupling strength.
+    omega
+        Finite positive phonon frequency.
+    nrandom
+        Nonnegative number of uniform random starts appended after the
+        deterministic starts.
+    random_scale
+        Finite positive dimensionless half-width of the uniform
+        perturbations, whose dimensional scale is ``abs(g) / omega``.
+    seed
+        Seed passed to an independent :class:`numpy.random.Generator`.
+
+    Returns
+    -------
+    numpy.ndarray
+        Initial gauge-fixed displacements with shape
+        ``(1 + norb + nrandom, norb, norb)``, ``float64`` dtype, and index
+        order ``[start, x, p]``.  Row zero is the coherent-state point
+        ``g / (omega * norb)``.  Row ``1 + s`` is zero except for
+        ``mu[s, s] = g / omega``.
+    """
+    if not isinstance(norb, (int, np.integer)) or isinstance(norb, (bool, np.bool_)) or norb <= 0:
+        raise ValueError("Number of orbitals must be a positive integer.")
+    if not isinstance(nrandom, (int, np.integer)) or isinstance(nrandom, (bool, np.bool_)) or nrandom < 0:
+        raise ValueError("Number of random guesses must be a non-negative integer.")
+    if not np.isfinite(g) or not np.isreal(g):
+        raise ValueError("Electron-phonon coupling g must be finite and real.")
+    if not np.isfinite(omega) or not np.isreal(omega) or omega <= 0:
+        raise ValueError("Phonon frequency omega must be finite, real, and positive.")
+    if not np.isfinite(random_scale) or not np.isreal(random_scale) or random_scale <= 0:
+        raise ValueError("Random scale must be finite, real, and positive.")
+    mu_cs = np.full((norb, norb), g / (omega * norb), dtype=np.float64)
+    guesses = np.empty((1 + norb + nrandom, norb, norb), dtype=np.float64)
+    guesses[0] = mu_cs
+    for s in range(norb):
+        mu_s = np.zeros((norb, norb), dtype=np.float64)
+        mu_s[s, s] = g / omega
+        guesses[s + 1] = mu_s
+    rng = np.random.default_rng(seed)
+    for i in range(nrandom):
+        perturbation = rng.uniform(-random_scale, random_scale, size=(norb, norb))
+        guesses[norb + 1 + i] = mu_cs + (abs(g) / omega) * perturbation
+    return guesses
 
 
 def lf_hf_local_alpha_point(
@@ -756,6 +888,84 @@ def lf_hf_local_alpha_point(
     return best, results
 
 
+def lf_hf_full_alpha_point(
+    alpha: float,
+    tmat: np.ndarray,
+    omega: float,
+    *,
+    nrandom: int = 8,
+    random_scale: float = 0.5,
+    seed: int = 0,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> tuple[
+    scipy_optimize.OptimizeResult,
+    list[scipy_optimize.OptimizeResult],
+]:
+    """Solve and diagnose one coupling point of full-matrix LF-HF.
+
+    The dimensionless coupling is converted using
+    ``g = sqrt(alpha * omega)``.  Gauge-fixed full-matrix starts are
+    generated and optimized independently, after which the lowest-energy
+    successful result is augmented with density and convergence diagnostics.
+
+    Parameters
+    ----------
+    alpha
+        Finite nonnegative coupling ``g**2 / omega``.
+    tmat
+        Square site-basis hopping matrix with shape ``(norb, norb)``.
+    omega
+        Finite positive phonon frequency.
+    nrandom
+        Number of uniform random starts in addition to the coherent-state
+        point and one localized point per site.
+    random_scale
+        Dimensionless half-width of the uniform starting-point
+        perturbations.
+    seed
+        Seed used by the independent random-number generator.
+    gtol
+        Positive gradient-norm tolerance passed to every optimization.
+    max_cycle
+        Positive maximum number of BFGS iterations per starting point.
+
+    Returns
+    -------
+    best
+        Lowest-energy successful result, augmented with ``alpha``, ``g``,
+        ``density``, ``density_imbalance``, ``nstart``, and ``nconverged``.
+        This is the same object as one entry in ``results``.
+    results
+        Optimization results in starting-point order.
+    """
+    if not np.isfinite(alpha) or not np.isreal(alpha) or alpha < 0:
+        raise ValueError("Alpha must be finite, real, and non-negative.")
+    if not np.isfinite(omega) or not np.isreal(omega) or omega <= 0:
+        raise ValueError("Phonon frequency omega must be finite, real, and positive.")
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    g = float(np.sqrt(alpha * omega))
+    mu0s = lf_hf_full_initial_guesses(
+        tmat.shape[0],
+        g,
+        omega,
+        nrandom=nrandom,
+        random_scale=random_scale,
+        seed=seed,
+    )
+    best, results = lf_hf_full_multistart(mu0s, tmat, g, omega, gtol=gtol, max_cycle=max_cycle)
+    density = cs_site_density(best["coeff"])
+    density_imbalance = float(np.max(density) - np.min(density))
+    best["alpha"] = float(alpha)
+    best["g"] = float(g)
+    best["density"] = density
+    best["density_imbalance"] = density_imbalance
+    best["nstart"] = len(results)
+    best["nconverged"] = sum(bool(res.success) for res in results)
+    return best, results
+
+
 def lf_hf_full_state(
     lam: np.ndarray,
     shift: np.ndarray,
@@ -804,3 +1014,81 @@ def lf_hf_full_state(
     coeff = eigvecs[:, 0]
     total_energy = omega * shift @ shift + orbital_energy
     return float(total_energy), coeff, float(orbital_energy)
+
+
+def lf_hf_full_optimize(
+    mu0: np.ndarray,
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    *,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> scipy_optimize.OptimizeResult:
+    """Optimize a one-electron full LF-HF reference.
+
+    Parameters
+    ----------
+    mu0
+        Finite real initial parameters with shape ``(nmode, norb)`` and
+        index order ``mu0[x, p]``.  The input array is not modified.
+    tmat
+        Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Local electron--phonon coupling strength.
+    omega
+        Positive phonon frequency.
+    gtol
+        Positive gradient-norm tolerance passed to BFGS.
+    max_cycle
+        Positive maximum number of BFGS iterations.
+
+    Returns
+    -------
+    scipy.optimize.OptimizeResult
+        The BFGS result augmented with ``coeff``, ``orbital_energy``, and
+        ``shift_residual``.  Its ``fun`` field is recomputed from the final
+        parameters, and ``shift_residual`` is the infinity norm of the
+        coherent-shift stationarity equation.
+    """
+    if mu0.ndim != 2 or mu0.shape[0] != mu0.shape[1]:
+        raise ValueError("Initial parameter array must be 2-dimensional.")
+    for mu_value in mu0.flat:
+        if not np.isfinite(mu_value) or not np.isreal(mu_value):
+            raise ValueError("Initial parameter array must contain finite real values.")
+    if tmat.ndim != 2 or tmat.shape[0] != tmat.shape[1]:
+        raise ValueError("Hopping matrix must be 2-dimensional and square.")
+    if mu0.shape[0] != tmat.shape[0]:
+        raise ValueError("Initial parameter array first dimension must match hopping matrix size.")
+    if gtol <= 0:
+        raise ValueError("Gradient tolerance must be positive.")
+    if max_cycle <= 0:
+        raise ValueError("Maximum cycle count must be positive.")
+    norb = tmat.shape[0]
+    x0 = np.asarray(mu0, dtype=np.float64, copy=True).ravel().copy()
+
+    def cost(flat_mu: np.ndarray) -> float:
+        mu = flat_mu.reshape((norb, norb))
+        shift = np.zeros(norb)
+        return lf_hf_full_state(mu, shift, tmat, g, omega)[0]
+
+    result = scipy_optimize.minimize(
+        cost,
+        x0,
+        method="BFGS",
+        jac="3-point",
+        options={"gtol": gtol, "maxiter": max_cycle, "disp": False},
+    )
+    final_shift = np.zeros(norb)
+    final_mu = result.x.reshape((norb, norb)).copy()
+    final_energy, final_coeff, final_orbital_energy = lf_hf_full_state(final_mu, final_shift, tmat, g, omega)
+    stationary_shift = lf_stationary_shift(final_coeff, final_mu, g, omega)
+    shift_residual = float(np.max(np.abs(final_shift - stationary_shift)))
+    result["mu"] = final_mu
+    result["lam"] = final_mu.copy()
+    result["shift"] = final_shift
+    result["coeff"] = final_coeff
+    result["orbital_energy"] = final_orbital_energy
+    result["shift_residual"] = shift_residual
+    result["fun"] = final_energy
+    return result

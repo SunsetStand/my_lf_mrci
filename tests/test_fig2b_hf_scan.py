@@ -57,10 +57,15 @@ def test_real_scan_recovers_cs_line_and_lf_symmetry_breaking():
         assert record["lf_density"].shape == (4,)
         np.testing.assert_allclose(record["cs_density"], 0.25, atol=1e-14)
         np.testing.assert_allclose(np.sum(record["lf_density"]), 1.0, atol=1e-14)
-        assert record["lf_nstart"] == 9
+        assert record["lf_nstart"] == 13
         assert 1 <= record["lf_nconverged"] <= record["lf_nstart"]
+    np.testing.assert_allclose(
+        [records[1]["lf_energy"], records[2]["lf_energy"]],
+        [-2.846976272802588, -2.933870018704931],
+        atol=1e-11,
+    )
     np.testing.assert_allclose(records[1]["lf_density_imbalance"], 0.0, atol=1e-8)
-    np.testing.assert_allclose(records[2]["lf_density_imbalance"], 0.7391966505886146, atol=1e-8)
+    np.testing.assert_allclose(records[2]["lf_density_imbalance"], 0.69394598142243, atol=1e-8)
 
 
 def test_preserves_unsorted_and_repeated_input_order():

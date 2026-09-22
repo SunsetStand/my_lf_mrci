@@ -1,4 +1,4 @@
-"""Scan the CS-HF, CS-MP2, and local LF-HF branches needed for Fig. 2b."""
+"""Scan the CS-HF, CS-MP2, and full-matrix LF-HF branches for Fig. 2b."""
 
 import csv
 from pathlib import Path
@@ -74,7 +74,7 @@ def _csv_row(
         "max_cycle": max_cycle,
         "coupling_convention": "paper_uncentered",
         "cs_branch": "uniform_symmetric",
-        "lf_ansatz": "local_diagonal",
+        "lf_ansatz": "full_density_diagonal",
         "cs_energy": f"{record['cs_energy']:.16g}",
         "cs_mp2_correction": f"{record['cs_mp2_correction']:.16g}",
         "cs_mp2_energy": f"{record['cs_mp2_energy']:.16g}",
@@ -107,12 +107,13 @@ def run_hf_scan(
     max_cycle: int = 500,
     csv_path: str | Path | None = None,
 ) -> list[dict[str, object]]:
-    """Evaluate CS-HF, CS-MP2, and local LF-HF in the supplied coupling order.
+    """Evaluate CS-HF, CS-MP2, and full-matrix LF-HF in coupling order.
 
     This experiment-level driver fixes the Fig. 2b model parameters to a
     four-site ring with ``t=-1`` and ``omega=0.5``.  CS-HF is initialized on
-    its uniform branch, while every LF-HF point uses the same reproducible
-    set of CS-centered random perturbations.
+    its uniform branch.  Every LF-HF point uses a coherent-state start, one
+    localized start per site, and the same reproducible uniform random
+    perturbations of the full density-diagonal ``lam[x, p]`` ansatz.
 
     Parameters
     ----------
@@ -120,9 +121,10 @@ def run_hf_scan(
         Nonempty one-dimensional array of finite nonnegative couplings.
         Values are neither sorted nor deduplicated.
     nrandom
-        Number of random LF-HF starts in addition to the CS point.
+        Number of random LF-HF starts in addition to the CS point and one
+        localized point per site.
     random_scale
-        Standard deviation of the LF-HF starting-point perturbations.
+        Dimensionless half-width of the uniform LF-HF perturbations.
     seed
         Seed reused at every coupling point.
     gtol
@@ -192,7 +194,7 @@ def run_hf_scan(
             cs_density_residual = float(cs_result["density_residual"])
             cs_density = cs_mp.cs_site_density(cs_coeff)
             cs_density_imbalance = float(np.max(cs_density) - np.min(cs_density))
-            best, _ = lf_mp.lf_hf_local_alpha_point(
+            best, _ = lf_mp.lf_hf_full_alpha_point(
                 alpha,
                 tmat,
                 omega,

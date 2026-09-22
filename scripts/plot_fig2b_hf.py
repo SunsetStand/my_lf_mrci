@@ -1,4 +1,4 @@
-"""Plot exact, CS-HF, CS-MP2, and local LF-HF results for Fig. 2b."""
+"""Plot exact, CS-HF, CS-MP2, and full-matrix LF-HF for Fig. 2b."""
 
 import csv
 from pathlib import Path
@@ -130,7 +130,7 @@ def plot_hf(
         marker="o",
         markerfacecolor="none",
         markersize=4.5,
-        label="LF-HF (local)",
+        label="LF-HF",
     )
     energy_ax.set_ylabel(r"$E$")
     energy_ax.set_title(

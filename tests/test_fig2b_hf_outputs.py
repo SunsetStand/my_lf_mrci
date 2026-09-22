@@ -15,6 +15,28 @@ def test_default_grid_matches_existing_fig2b_exact_grid():
     np.testing.assert_allclose(scan.DEFAULT_ALPHA_VALUES, expected, atol=0.0)
 
 
+def test_persisted_scan_uses_full_lf_and_matches_paper_anchors():
+    data, metadata = read_hf_csv()
+
+    assert metadata["lf_ansatz"] == "full_density_diagonal"
+    np.testing.assert_allclose(data["alpha"], scan.DEFAULT_ALPHA_VALUES, atol=0.0)
+    anchors = {
+        1.0: -2.380726824272466,
+        2.2: -2.846976272802588,
+        2.4: -2.933870018704931,
+        2.8: -3.226922548557187,
+        3.0: -3.390114000228852,
+    }
+    for alpha, expected_energy in anchors.items():
+        index = int(np.flatnonzero(np.isclose(data["alpha"], alpha))[0])
+        assert data["lf_energy"][index] == pytest.approx(expected_energy, abs=1e-12)
+
+    index_2p2 = int(np.flatnonzero(np.isclose(data["alpha"], 2.2))[0])
+    index_2p4 = int(np.flatnonzero(np.isclose(data["alpha"], 2.4))[0])
+    assert data["lf_density_imbalance"][index_2p2] < 1e-8
+    assert data["lf_density_imbalance"][index_2p4] > 0.69
+
+
 def test_scan_writes_auditable_csv_and_reader_sorts_rows(tmp_path):
     csv_path = tmp_path / "data" / "fig2b_hf.csv"
 
@@ -34,7 +56,8 @@ def test_scan_writes_auditable_csv_and_reader_sorts_rows(tmp_path):
     assert rows[0]["t"] == "-1"
     assert rows[0]["coupling_convention"] == "paper_uncentered"
     assert rows[0]["cs_branch"] == "uniform_symmetric"
-    assert rows[0]["lf_ansatz"] == "local_diagonal"
+    assert rows[0]["lf_ansatz"] == "full_density_diagonal"
+    assert rows[0]["lf_nstart"] == "5"
     assert rows[0]["nrandom"] == "0"
 
     data, metadata = read_hf_csv(csv_path)
