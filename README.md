@@ -41,6 +41,31 @@ optimization diagnostics needed to audit the LF-HF symmetry breaking, along
 with the CS-MP2 correction and total energy.  The energy panel also reads
 `data/fig2b_exact.csv` and overlays the existing exact ED reference.
 
+Run the extended Fig. 2b scan containing LF-MP2 with:
+
+```bash
+python -m scripts.fig2b_mp2_scan
+python -m scripts.plot_fig2b_mp2
+```
+
+This writes `data/fig2b_mp2.csv`, `figures/fig2b_mp2.png`, and
+`figures/fig2b_mp2.pdf` without replacing the HF-only artifacts above.  The
+CSV preserves all previous CS-HF, CS-MP2, and LF-HF fields and adds the
+pure-phonon, electronic-single, and total LF-MP2 corrections.  LF-MP2 uses a
+collective total-phonon cutoff `max_total=10`, corresponding to 1000
+non-vacuum configurations for four modes.  The paper reports a cutoff of 16;
+against that value, the maximum total-energy difference at representative
+points `alpha=0.4, 2.2, 2.4, 3.0` was `6.3e-15`.  The automated convergence
+test checks the worst anchor at `alpha=2.2` to an absolute tolerance of
+`1e-12`.
+
+The LF-MP2 energies were also checked against the vector markers in the
+published Fig. 2b.  Digitizing all 16 plotted coupling values gives a maximum
+absolute difference of `6.4e-4` and an RMS difference of `2.2e-4`, both below
+the energy resolution set by the published line width.  This is a
+figure-resolution comparison because the article does not provide the
+underlying numerical table.
+
 Current learning material: `docs/cs_lf_theory_stage.md`.  The Fig. 2d script
 `scripts/exact_fig2d_probe.py` is deliberately a finite-cutoff diagnostic, not
 a converged reproduction of the published strong-coupling curve.

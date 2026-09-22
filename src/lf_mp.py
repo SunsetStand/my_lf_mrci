@@ -49,6 +49,157 @@ def lf_total_phonon_configurations(nmode: int, max_total: int) -> np.ndarray:
     return np.array(occupations, dtype=np.int64)
 
 
+def lf_mp2_denominators(
+    mo_energy: np.ndarray,
+    omega: float,
+    occupations: np.ndarray,
+    nocc: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build pure-phonon and electronic-single LF-MP2 denominators.
+
+    Canonical MOs are ordered with occupied orbitals before virtual orbitals.
+    For a non-vacuum phonon configuration ``X_k`` with total occupation
+    ``N_k``, this function evaluates
+
+    ``pure[k] = -N_k * omega``
+
+    and
+
+    ``singles[k, i, a] = epsilon[i] - epsilon[nocc+a] - N_k * omega``.
+
+    Parameters
+    ----------
+    mo_energy
+        Finite real canonical-MO energies in nondecreasing order with shape
+        ``(nmo,)``.
+    omega
+        Finite positive phonon frequency shared by all modes.
+    occupations
+        Nonnegative integer non-vacuum configurations with shape
+        ``(nconfig, nmode)`` and index order ``[k, x]``.
+    nocc
+        Number of occupied MOs, satisfying ``1 <= nocc < nmo``.
+
+    Returns
+    -------
+    total_occupations
+        Total phonon occupations ``N_k`` with shape ``(nconfig,)`` and
+        ``int64`` dtype.
+    pure_denominators
+        Pure-phonon denominators with shape ``(nconfig,)``.
+    single_denominators
+        Electronic-single plus phonon denominators with shape
+        ``(nconfig, nocc, nvir)`` and index order ``[k, i, a]``.  The local
+        virtual index corresponds to global MO index ``nocc + a``.
+
+    Notes
+    -----
+    Every returned denominator is strictly negative for a stable canonical
+    reference and a non-vacuum phonon configuration.
+    """
+    if isinstance(nocc, (bool, np.bool_)) or not isinstance(nocc, (int, np.integer)):
+        raise TypeError("Number of occupied MOs must be a positive integer.")
+    if mo_energy.ndim != 1:
+        raise ValueError("MO energy array must be 1-dimensional.")
+    for i in range(mo_energy.size):
+        if not np.isfinite(mo_energy[i]) or not np.isreal(mo_energy[i]):
+            raise ValueError("MO energy array must contain finite real values.")
+        if i < mo_energy.size - 1 and mo_energy[i] > mo_energy[i + 1]:
+            raise ValueError("MO energy array must be nondecreasing.")
+    if not np.isfinite(omega) or not np.isreal(omega) or omega <= 0:
+        raise ValueError("Phonon frequency omega must be finite, real, and positive.")
+    if occupations.ndim != 2:
+        raise ValueError("Occupation array must be 2-dimensional.")
+    for occ_value in occupations.flat:
+        if not np.issubdtype(type(occ_value), np.integer) or occ_value < 0:
+            raise ValueError("Occupation array must contain non-negative integers.")
+    for total in np.sum(occupations, axis=1):
+        if total <= 0:
+            raise ValueError("Occupation array must not contain vacuum configurations.")
+    nmo = mo_energy.size
+    if not (1 <= nocc < nmo):
+        raise ValueError("Number of occupied MOs must satisfy 1 <= nocc < nmo.")
+    total_occupations = np.sum(occupations, axis=1, dtype=np.int64)
+    denominator_pure = -total_occupations * omega
+    G = mo_energy[:nocc, None] - mo_energy[nocc:]  # shape (nocc, nvir)
+    denominator_singles = G[None, :, :] + denominator_pure[:, None, None]
+    return total_occupations, denominator_pure, denominator_singles
+
+
+def lf_mp2_energy(
+    pure_matrix_elements: np.ndarray,
+    single_matrix_elements: np.ndarray,
+    pure_denominators: np.ndarray,
+    single_denominators: np.ndarray,
+) -> float:
+    """Return the one-electron LF-MP2 second-order correction.
+
+    For each non-vacuum phonon configuration ``X_k``, the pure-phonon
+    channel has matrix element ``M[k]`` and denominator ``D[k]``.  The
+    electronic-single plus phonon channel has matrix elements ``M[k, i, a]``
+    and denominators ``D[k, i, a]``.  This function evaluates
+
+    ``sum_k abs(M_pure[k])**2 / D_pure[k]``
+
+    plus
+
+    ``sum_kia abs(M_single[k, i, a])**2 / D_single[k, i, a]``.
+
+    Parameters
+    ----------
+    pure_matrix_elements
+        Finite real or complex pure-phonon amplitudes with shape
+        ``(nconfig,)`` and index order ``[k]``.
+    single_matrix_elements
+        Finite real or complex electronic-single plus phonon amplitudes with
+        shape ``(nconfig, nocc, nvir)`` and index order ``[k, i, a]``.
+    pure_denominators
+        Finite real strictly negative pure-phonon denominators with shape
+        ``(nconfig,)``.
+    single_denominators
+        Finite real strictly negative electronic-single plus phonon
+        denominators with shape ``(nconfig, nocc, nvir)``.
+
+    Returns
+    -------
+    float
+        Total LF-MP2 correction.  It is nonpositive and contains no extra
+        spin, symmetry, or factorial prefactor.
+
+    Notes
+    -----
+    The first axis must describe the same ordered phonon configurations in
+    all four inputs.  This is the complete second-order correction for the
+    one-electron Fig. 2b model; electronic double excitations do not exist.
+    """
+    if pure_matrix_elements.ndim != 1:
+        raise ValueError("Pure-phonon matrix element array must be 1-dimensional.")
+    if single_matrix_elements.ndim != 3:
+        raise ValueError("Electronic-single matrix element array must be 3-dimensional.")
+    if pure_denominators.ndim != 1:
+        raise ValueError("Pure-phonon denominator array must be 1-dimensional.")
+    if single_denominators.ndim != 3:
+        raise ValueError("Electronic-single denominator array must be 3-dimensional.")
+    if pure_matrix_elements.shape[0] != pure_denominators.shape[0]:
+        raise ValueError("Pure-phonon matrix elements and denominators must have the same length.")
+    if single_matrix_elements.shape != single_denominators.shape:
+        raise ValueError("Electronic-single matrix elements and denominators must have the same shape.")
+    if pure_matrix_elements.shape[0] != single_matrix_elements.shape[0]:
+        raise ValueError("Pure-phonon and electronic-single matrix elements must have the same first dimension.")
+    if not np.all(np.isfinite(pure_denominators)) or not np.all(np.isreal(pure_denominators)) or not np.all(pure_denominators < 0):
+        raise ValueError("Pure-phonon denominators must be finite, real, and strictly negative.")
+    if not np.all(np.isfinite(single_denominators)) or not np.all(np.isreal(single_denominators)) or not np.all(single_denominators < 0):
+        raise ValueError("Electronic-single denominators must be finite, real, and strictly negative.")
+    if not np.all(np.isfinite(pure_matrix_elements)):
+        raise ValueError("Pure-phonon matrix elements must be finite.")
+    if not np.all(np.isfinite(single_matrix_elements)):
+        raise ValueError("Electronic-single matrix elements must be finite.")
+    energy_pure = np.sum(np.abs(pure_matrix_elements)**2 / pure_denominators)
+    energy_single = np.sum(np.abs(single_matrix_elements)**2 / single_denominators)
+    total_energy = energy_pure + energy_single
+    return float(total_energy)
+
+
 def lf_franck_condon(lam: np.ndarray) -> np.ndarray:
     """Return the zero-phonon Franck--Condon overlap matrix.
 
@@ -389,6 +540,104 @@ def lf_effective_one_body(
         diagonal_correction[p] = phonon_part + coupling_part
     heff = tmat * overlap + np.diag(diagonal_correction)
     return heff
+
+
+def lf_mp2_reference_point(
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    shift: np.ndarray,
+    lam: np.ndarray,
+    *,
+    max_total: int,
+) -> dict[str, object]:
+    """Evaluate LF-HF and LF-MP2 for one fixed one-electron LF reference.
+
+    The final zero-phonon effective Hamiltonian is diagonalized to define the
+    canonical occupied and virtual MOs.  Every non-vacuum phonon configuration
+    satisfying ``sum_x n_x <= max_total`` is then included in the pure-phonon
+    and electronic-single LF-MP2 channels.
+
+    Parameters
+    ----------
+    tmat
+        Finite Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    g
+        Finite real local electron--phonon coupling strength.
+    omega
+        Finite positive phonon frequency shared by all modes.
+    shift
+        Finite real coherent displacements with shape ``(norb,)``.  The
+        gauge-fixed full-matrix LF-HF calculation passes a zero vector.
+    lam
+        Finite real conditional displacements with shape ``(norb, norb)`` and
+        index order ``lam[x, p]``.
+    max_total
+        Positive inclusive cutoff on the total phonon occupation.
+
+    Returns
+    -------
+    dict
+        Auditable result with exactly the following entries:
+
+        ``hf_energy``
+            Zero-phonon LF-HF energy including ``omega * shift @ shift``.
+        ``mp2_correction``
+            LF-MP2 second-order correction through ``max_total``.
+        ``total_energy``
+            Sum of ``hf_energy`` and ``mp2_correction``.
+        ``max_total``
+            Integer total-phonon cutoff used for this result.
+        ``coeff``
+            Occupied canonical MO with shape ``(norb,)``.
+        ``mo_energy``, ``mo_coeff``
+            Canonical energies with shape ``(norb,)`` and site-to-MO
+            coefficients with shape ``(norb, norb)``.
+        ``occupations``, ``total_occupations``
+            Non-vacuum configurations with shape ``(nconfig, norb)`` and
+            their totals with shape ``(nconfig,)``.
+        ``pure_matrix_elements``, ``pure_denominators``
+            Pure-phonon channel arrays with shape ``(nconfig,)``.
+        ``single_matrix_elements``, ``single_denominators``
+            Electronic-single plus phonon arrays with shape
+            ``(nconfig, 1, norb - 1)`` and index order ``[k, i, a]``.
+
+    Notes
+    -----
+    This routine does not optimize ``lam`` or ``shift``.  Simultaneously
+    applying ``lam[x, p] -> lam[x, p] + c[x]`` and
+    ``shift[x] -> shift[x] + c[x]`` leaves all returned energies invariant.
+    """
+    phonon_configurations = lf_total_phonon_configurations(nmode=lam.shape[0], max_total=max_total)
+    heff = lf_effective_one_body(tmat, g, omega, shift, lam)
+    mo_energy, mo_coeff = np.linalg.eigh(heff)
+    nocc = 1
+    coeff = mo_coeff[:, 0]
+    energy_hf = omega * np.dot(shift, shift) + mo_energy[0]
+    site_couplings = lf_vacuum_coupling_site_matrices(tmat, g, omega, shift, lam, phonon_configurations)
+    _, pure_matrix_elements, single_matrix_elements = lf_vacuum_coupling_mo_elements(
+        site_couplings,
+        mo_coeff,
+        nocc,
+    )
+    total_occupations, pure_denominators, single_denominators = lf_mp2_denominators(mo_energy, omega, phonon_configurations, nocc)
+    mp2_energy = lf_mp2_energy(pure_matrix_elements, single_matrix_elements, pure_denominators, single_denominators)
+    total_energy = energy_hf + mp2_energy
+    return {
+        "hf_energy": energy_hf,
+        "mp2_correction": mp2_energy,
+        "total_energy": total_energy,
+        "max_total": max_total,
+        "coeff": coeff,
+        "mo_energy": mo_energy,
+        "mo_coeff": mo_coeff,
+        "occupations": phonon_configurations,
+        "total_occupations": total_occupations,
+        "pure_matrix_elements": pure_matrix_elements,
+        "pure_denominators": pure_denominators,
+        "single_matrix_elements": single_matrix_elements,
+        "single_denominators": single_denominators,
+    }
 
 
 def lf_energy(
@@ -963,6 +1212,81 @@ def lf_hf_full_alpha_point(
     best["density_imbalance"] = density_imbalance
     best["nstart"] = len(results)
     best["nconverged"] = sum(bool(res.success) for res in results)
+    return best, results
+
+
+def lf_mp2_alpha_point(
+    alpha: float,
+    tmat: np.ndarray,
+    omega: float,
+    *,
+    max_total: int,
+    nrandom: int = 8,
+    random_scale: float = 0.5,
+    seed: int = 0,
+    gtol: float = 1e-8,
+    max_cycle: int = 500,
+) -> tuple[
+    scipy_optimize.OptimizeResult,
+    list[scipy_optimize.OptimizeResult],
+]:
+    """Optimize full-matrix LF-HF and evaluate LF-MP2 at one alpha.
+
+    The lowest-energy successful full-matrix LF-HF result is used as the
+    fixed reference for :func:`lf_mp2_reference_point`.  The MP2 result is
+    added to that same :class:`scipy.optimize.OptimizeResult`, preserving its
+    identity within the returned list of all starting-point results.
+
+    Parameters
+    ----------
+    alpha
+        Finite nonnegative dimensionless coupling ``g**2 / omega``.
+    tmat
+        Finite Hermitian site-basis hopping matrix with shape ``(norb, norb)``.
+    omega
+        Finite positive phonon frequency.
+    max_total
+        Positive inclusive cutoff on the total phonon occupation.  It is
+        validated before any LF-HF optimizations are started.
+    nrandom
+        Number of random starts in addition to the coherent-state point and
+        one localized point per site.
+    random_scale
+        Dimensionless half-width of the random starting-point perturbations.
+    seed
+        Seed used by the independent random-number generator.
+    gtol
+        Positive gradient-norm tolerance passed to every optimization.
+    max_cycle
+        Positive maximum number of BFGS iterations per starting point.
+
+    Returns
+    -------
+    best
+        The same lowest-energy successful optimization result returned by
+        :func:`lf_hf_full_alpha_point`, augmented with all fields returned by
+        :func:`lf_mp2_reference_point`.  ``best.fun`` remains the LF-HF
+        energy, while ``best.total_energy`` is the LF-MP2 total energy.
+    results
+        All LF-HF optimization results in starting-point order.  ``best`` is
+        the same object as one entry in this list.
+    """
+    if not isinstance(max_total, (int, np.integer)) or isinstance(max_total, (bool, np.bool_)):
+        raise TypeError("max_total must be a positive integer")
+    if max_total <= 0:
+        raise ValueError("max_total must be a positive integer")
+    best, results = lf_hf_full_alpha_point(
+        alpha,
+        tmat,
+        omega,
+        nrandom=nrandom,
+        random_scale=random_scale,
+        seed=seed,
+        gtol=gtol,
+        max_cycle=max_cycle,
+    )
+    mp2_result = lf_mp2_reference_point(tmat, best["g"], omega, best["shift"], best["lam"], max_total=max_total)
+    best.update(mp2_result)
     return best, results
 
 
