@@ -425,3 +425,198 @@ def lf_noci_site_phonon_moment(
                 for B in range(K):
                     M[x,p] += coeff[A,p] * smat[A,p,B,p] * coeff[B,p] * (eta[A,x,p] + eta[B,x,p])
     return M
+
+
+def lf_noci_trial_orbit(
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    base_lam: np.ndarray,
+    base_shift: np.ndarray,
+    seed_lam: np.ndarray,
+    seed_shift: np.ndarray,
+    *,
+    overlap_cut: float = 1e-10
+) -> tuple[float, float, int, int]:
+    """Measure the NOCI energy change from one full translation orbit.
+
+    Solve the lowest state in the existing frame span, then append every
+    cyclic translation of one candidate frame and rebuild both full kernels.
+    The augmented kernels include cross terms between the original and new
+    frames.  No input array is modified.
+
+    Parameters
+    ----------
+    tmat
+        Finite symmetric float64 site hopping matrix with shape ``(L, L)``
+        and index order ``[p, q]``.
+    g
+        Finite real uncentered local electron-phonon coupling.
+    omega
+        Finite positive phonon frequency.
+    base_lam
+        Finite float64 LF parameters for ``K >= 1`` existing frames,
+        with shape ``(K, L, L)`` and order ``[frame, mode, site]``.
+    base_shift
+        Finite float64 shifts with shape ``(K, L)`` and order
+        ``[frame, mode]``.
+    seed_lam
+        Finite float64 LF parameters for one candidate frame, with
+        shape ``(L, L)`` and order ``[mode, site]``.
+    seed_shift
+        Finite float64 shifts for the candidate with shape ``(L,)``.
+    overlap_cut
+        Positive relative overlap-eigenvalue threshold passed to
+        ``lf_noci_lowest`` for both solves.
+
+    Returns
+    -------
+    energy_base
+        Lowest NOCI energy in the existing frame span.
+    energy_augmented
+        Lowest NOCI energy after adding the candidate's full orbit.
+    rank_base
+        Retained overlap rank of the existing span.
+    rank_augmented
+        Retained overlap rank after augmentation.
+
+    Raises
+    ------
+    ValueError
+        If dimensions, finite values, symmetry, or solver parameters are invalid.
+    TypeError
+        If an input array does not have float64 dtype.
+
+    Notes
+    -----
+    The variational energy gain is ``energy_base - energy_augmented``.
+    Duplicate or physically equivalent frames need not increase rank.
+    Numerical overlap truncation can break exact subspace nesting, so this
+    function does not clip a small negative computed gain.
+    """
+    H = lf_frame_hamiltonian(tmat, g, omega, base_lam, base_shift)
+    S = lf_frame_overlap(base_lam, base_shift)
+    Energy, _, rank = lf_noci_lowest(H, S, overlap_cut=overlap_cut)
+    lam_orbit, shift_orbit = lf_translation_orbit(seed_lam, seed_shift)
+    if lam_orbit.shape[1:] != base_lam.shape[1:]:
+        raise ValueError("candidate frame size must match the base frames")
+    lam = np.append(base_lam, lam_orbit, axis=0)
+    shift = np.append(base_shift, shift_orbit, axis=0)
+    H_new = lf_frame_hamiltonian(tmat, g, omega, lam, shift)
+    S_new = lf_frame_overlap(lam, shift)
+    Energy_new, _, rank_new = lf_noci_lowest(H_new, S_new, overlap_cut=overlap_cut)
+    return Energy, Energy_new, rank, rank_new
+
+
+def lf_noci_score_orbits(
+    tmat: np.ndarray,
+    g: float,
+    omega: float,
+    base_lam: np.ndarray,
+    base_shift: np.ndarray,
+    candidate_lam: np.ndarray,
+    candidate_shift: np.ndarray,
+    *,
+    overlap_cut: float = 1e-10,
+) -> tuple[float, int, np.ndarray, np.ndarray]:
+    """Score each candidate LF orbit against the same fixed NOCI base.
+
+    Candidate ``j`` is evaluated by adding only its full translation
+    orbit to the existing frames and solving the lowest generalized
+    eigenstate.  Candidates are not appended cumulatively, sorted,
+    filtered, or selected.
+
+    Parameters
+    ----------
+    tmat
+        Finite symmetric float64 hopping matrix with shape ``(L, L)``
+        and index order ``[p, q]``.
+    g
+        Finite real uncentered local electron-phonon coupling.
+    omega
+        Finite positive phonon frequency.
+    base_lam
+        Finite float64 parameters of ``K >= 1`` base frames, with shape
+        ``(K, L, L)`` and order ``[frame, mode, site]``.
+    base_shift
+        Finite float64 base shifts with shape ``(K, L)``.
+    candidate_lam
+        Finite float64 candidate seeds with shape ``(J, L, L)``,
+        ``J >= 1``, and order ``[candidate, mode, site]``.
+    candidate_shift
+        Finite float64 candidate shifts with shape ``(J, L)``.
+    overlap_cut
+        Positive relative overlap cutoff used for every trial solve.
+
+    Returns
+    -------
+    energy_base
+        Lowest NOCI energy in the fixed base span.
+    rank_base
+        Retained overlap rank of the base span.
+    energy_trial
+        Float64 array with shape ``(J,)``: lowest energies after
+        adding each candidate orbit separately, in input order.
+    rank_trial
+        Int64 array with shape ``(J,)``: corresponding retained ranks.
+
+    Raises
+    ------
+    ValueError
+        If shapes are empty or incompatible, values are nonfinite, or
+        model and solver parameters are invalid.
+    TypeError
+        If an input array does not have float64 dtype.
+
+    Notes
+    -----
+    The energy gain of candidate ``j`` is
+    ``energy_base - energy_trial[j]``.  The result is not the energy
+    of a space containing all candidates at once.  Input arrays are
+    neither modified nor renormalized.
+    """
+    if base_lam.ndim != 3 or base_lam.shape[0] == 0 or base_lam.shape[1] == 0 or base_lam.shape[1] != base_lam.shape[2]:
+        raise ValueError("base_lam must have nonempty shape (K, L, L)")
+    K, L, _ = base_lam.shape
+    if base_shift.shape != (K, L):
+        raise ValueError("base_shift must have shape (K, L)")
+    if candidate_lam.ndim != 3 or candidate_lam.shape[0] == 0 or candidate_lam.shape[1:] != (L, L):
+        raise ValueError("candidate_lam must have nonempty shape (J, L, L)")
+    J = candidate_lam.shape[0]
+    if candidate_shift.shape != (J, L):
+        raise ValueError("candidate_shift must have shape (J, L)")
+    arrays = (base_lam, base_shift, candidate_lam, candidate_shift)
+    if any(array.dtype != np.float64 for array in arrays):
+        raise TypeError("LF frame arrays must have float64 dtype")
+    if any(not np.all(np.isfinite(array)) for array in arrays):
+        raise ValueError("LF frame arrays must contain only finite values")
+    candidate_energy = np.zeros((J,), dtype=np.float64)
+    candidate_rank = np.zeros((J,), dtype=np.int64)
+    base_energy = 0.0
+    base_rank = 0
+    for j in range(J):
+        if j == 0:
+            base_energy, trial_energy, base_rank, trial_rank = lf_noci_trial_orbit(
+                tmat,
+                g,
+                omega,
+                base_lam,
+                base_shift,
+                candidate_lam[j],
+                candidate_shift[j],
+                overlap_cut=overlap_cut,
+            )
+        else:
+            _, trial_energy, _, trial_rank = lf_noci_trial_orbit(
+                tmat,
+                g,
+                omega,
+                base_lam,
+                base_shift,
+                candidate_lam[j],
+                candidate_shift[j],
+                overlap_cut=overlap_cut,
+            )
+        candidate_energy[j] = trial_energy
+        candidate_rank[j] = trial_rank
+    return base_energy, base_rank, candidate_energy, candidate_rank
