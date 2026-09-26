@@ -85,3 +85,23 @@ The figure retains the exact ED, CS-HF/MP2, and LF-HF/MP2 curves and adds
 the MR-LF NOCI energy and electronic density imbalance. This is a fixed
 variational frame recipe, not automatic reference selection or CI with
 external phonon excitations.
+
+To examine how the number of LF frames and the retained overlap rank affect
+the energy at the coupling where LF-HF differs most from exact ED, run:
+
+```bash
+python -m scripts.fig2b_mr_convergence
+python -m scripts.plot_fig2b_mr_convergence
+```
+
+The scripts select `alpha=2.4` from the existing HF and exact CSV files.
+They start from one LF-HF frame, restore its four-site translation orbit,
+add the coherent-state-start orbit, and then greedily add complete orbits
+from a fixed displacement path with theta values
+`0.25, 0.5, 0.75, 1.25, 1.5, 1.75, 2.0`. The output is
+`data/fig2b_mr_worst_convergence.csv` and
+`figures/fig2b_mr_worst_convergence.{png,pdf}`. The plot shows exact ED,
+nominal versus retained basis dimension, and an overlap-cut sensitivity
+range. This finite candidate pool leaves a nonzero gap to exact; its
+late points depend on the overlap threshold and should not be presented
+as convergence to the exact state.
