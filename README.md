@@ -69,3 +69,19 @@ underlying numerical table.
 Current learning material: `docs/cs_lf_theory_stage.md`.  The Fig. 2d script
 `scripts/exact_fig2d_probe.py` is deliberately a finite-cutoff diagnostic, not
 a converged reproduction of the published strong-coupling curve.
+
+Run the fixed-frame MR-LF NOCI baseline and add it to the Fig. 2b comparison:
+
+```bash
+python -m scripts.fig2b_mr_scan
+python -m scripts.plot_fig2b_mr
+```
+
+This writes `data/fig2b_mr.csv` and `figures/fig2b_mr.{png,pdf}` without
+replacing the earlier scan or figure. At each of the same 16 alpha values,
+the recipe combines the full translation orbit of the lowest LF-HF frame
+with the full orbit of the frame optimized from the coherent-state start.
+The figure retains the exact ED, CS-HF/MP2, and LF-HF/MP2 curves and adds
+the MR-LF NOCI energy and electronic density imbalance. This is a fixed
+variational frame recipe, not automatic reference selection or CI with
+external phonon excitations.
