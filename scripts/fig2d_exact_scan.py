@@ -47,7 +47,8 @@ def resize_guess(vector, nmax):
 
 def solve_centered(alpha, omega, nmax, previous=None, *,
                    residual_tolerance=1e-8, max_space=40,
-                   max_memory=1400, max_cycle=500):
+                   max_memory=1400, max_cycle=500,
+                   include_vacuum_seed=True):
     """Run memory-limited Davidson with unchanged production contractions."""
     tmat = ep.electron_ring_hopping(4, -1.0)
     g = float(ep.alpha_to_g(alpha, omega))
@@ -62,10 +63,11 @@ def solve_centered(alpha, omega, nmax, previous=None, *,
     with patch.object(ep, "phonon_configs", cached_configs):
         diagonal = ep.make_hdiag(tmat, 4.0, g, hpp, 4, (2, 2), nmax)
         guesses = [resize_guess(previous, nmax).ravel()]
-        if previous is not None:
+        if previous is not None and include_vacuum_seed:
             # Keep the accurate embedded state intact. A separate electronic
             # vacuum seed allows competing symmetry sectors into the solve.
             guesses.append(resize_guess(None, nmax).ravel())
+        previous = None  # Release a caller-owned trial when passed inline.
 
         def hop(vector):
             nonlocal calls
@@ -101,7 +103,7 @@ def solve_centered(alpha, omega, nmax, previous=None, *,
             print(f"  Davidson stalled at residual={residual:.3e}; "
                   "retrying with Lanczos", flush=True)
             dimension = vector.size
-            ncv = min(40, max(8, int(max_memory*1e6/(8*dimension))-8))
+            ncv = min(40, max(4, int(max_memory*1e6/(8*dimension))-8))
             operator = LinearOperator((dimension, dimension), matvec=hop,
                                       dtype=np.float64)
             _evals, evecs = eigsh(operator, k=1, which="SA", v0=vector,

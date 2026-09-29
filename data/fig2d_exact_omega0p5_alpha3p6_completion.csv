@@ -1,0 +1,2 @@
+alpha,g,omega,L,neleca,nelecb,U,t,Nmax,D,energy_centered,paper_energy_shift,energy,residual,solver,solver_converged,delta_E,cutoff_converged,cutoff_tolerance,residual_tolerance,required_consecutive,convention,seconds,matvecs
+3.6,1.3416407864998738,0.5,4,2,2,4.0,-1.0,30,33246756,-7.181425563209032,-14.4,-21.58142556320903,9.475549202395009e-09,davidson,True,7.87095011389738e-09,True,1e-06,1e-08,2,centered_solve_paper_energy,650.1219777519999,85

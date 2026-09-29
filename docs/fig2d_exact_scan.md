@@ -43,13 +43,15 @@ $$
 
 - Hamiltonian action 与对角预条件数据均直接来自用户的 src/my_direct_ep.py。
 - 在一次求解中缓存原有 phonon_configs 的输出，避免每次矩阵乘都重新枚举。
-- 更大 cutoff 使用前一个波函数的零填充嵌入作为初猜；当前脚本保留该初猜并另加电子真空初猜，使其他对称性分量可以参与求解。
-- 初始生产批次使用嵌入态与少量电子真空分量混合；两种初猜方式使用同一 Hamiltonian 和验收阈值。
+- 更大 cutoff 使用前一个波函数的零填充嵌入作为初猜。常规扫描另加电子真空初猜，使其他对称性分量可以参与求解；低频高耦合补算只使用已经收敛的嵌入态，以降低大维度求解的内存占用。
+- 初始生产批次使用嵌入态与少量电子真空分量混合；这些初猜方式使用同一 Hamiltonian 和验收阈值。
 - PySCF Davidson 设置内存预算，较大 Krylov 空间可使用临时磁盘存储。
 - 在观察到残差停滞时，当前驱动器改用 SciPy Lanczos/eigsh，仍调用相同 Hamiltonian action，并重新检查 residual。
 - BLAS/OpenMP 线程设为 1，避免张量小操作中线程开销过大。
 
 原脚本 kernel 不支持传入初猜或 max_memory，因此数据脚本直接组织通用本征求解器；src 中的模型函数没有改动。
+
+长作业中途因运行环境重启而中断；已完成的 cutoff 行留在原始 CSV。恢复批次将波函数保存在被 Git 忽略的 `.fig2d_checkpoints/`，重算了 $\alpha=3.2$ 并接着计算 $3.6$。原始高耦合 CSV 中已经收敛的 $2.4,2.8$ 两点另存为不含重复行的输入文件，原始记录不作删改。$\alpha=4$ 的最终补算由 [fig2d_complete_anchor.py](../scripts/fig2d_complete_anchor.py) 先重建 $N_{\max}=32$ 波函数，与已有能量核对，再热启动下一 cutoff。重建初猜是各个配对电子行列式与其条件相干态的叠加，局域位移 $\eta_x=-(g/\omega)(n_x-1)$；它只决定迭代起点，最终能量仍由原 Hamiltonian 收缩和残差检验确定。
 
 ## 文件与复现
 
