@@ -1416,3 +1416,37 @@ def lf_hf_full_optimize(
     result["shift_residual"] = shift_residual
     result["fun"] = final_energy
     return result
+
+
+def lf_hf_multi_fixed_energy(
+    tmat: np.ndarray,
+    U: float,
+    g: float,
+    omega: float,
+    nelec: tuple[int, int],
+    occ_a: np.ndarray,
+    occ_b: np.ndarray,
+    lam: np.ndarray,
+    shift: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    """Return (energy, spin_density) for a fixed unrestricted LF reference."""
+    D_a = occ_a @ occ_a.T
+    D_b = occ_b @ occ_b.T
+    rho_a = np.diag(D_a)
+    rho_b = np.diag(D_b)
+    rho = rho_a + rho_b
+    n_orb = tmat.shape[0]
+    Q = np.zeros((n_orb, n_orb))
+    for p in range(n_orb):
+        for q in range(n_orb):
+            Q[p, q] = rho[p] * rho[q] - D_a[p, q] * D_a[q, p] - D_b[p, q] * D_b[q, p] + (rho[p] if p == q else 0)
+    S = np.zeros((n_orb, n_orb))
+    for p in range(n_orb):
+        for q in range(n_orb):
+            S[p, q] = np.exp(-0.5 * np.sum((lam[:,p]-lam[:,q])**2))
+    E_t = np.sum(tmat * S * (D_a + D_b).T)
+    E_U = U * np.sum(rho_a * rho_b)
+    E_ph = omega * np.sum(shift**2 - 2 * shift* np.sum(lam @ rho, axis=1) + np.sum(lam @ Q @ lam.T))
+    E_ep = 2 * g * np.sum(shift*rho - np.sum(lam * Q, axis=1))
+    E = E_t + E_U + E_ph + E_ep
+    return E, rho_a - rho_b
