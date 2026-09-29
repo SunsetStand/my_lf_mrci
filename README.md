@@ -86,6 +86,27 @@ the MR-LF NOCI energy and electronic density imbalance. This is a fixed
 variational frame recipe, not automatic reference selection or CI with
 external phonon excitations.
 
+To test whether a symmetry-broken frame helps before the LF-HF branch breaks,
+run the separate cross-alpha MR-LF scan and comparison plot:
+
+```bash
+python -m scripts.fig2b_mr_broken_seed_scan
+python -m scripts.plot_fig2b_mr_broken_seed
+```
+
+The scan reoptimizes the original MR-LF frames at each alpha from 0 to 2.2,
+then adds the full translation orbit of the best broken LF-HF frame found at
+alpha=2.4. Every NOCI energy uses the target alpha's Hamiltonian. The outputs
+are `data/fig2b_mr_broken_seed.csv`, a frame-parameter archive
+`data/fig2b_mr_broken_seed_frames.npz`, and
+`figures/fig2b_mr_broken_seed.{png,pdf}`. The figure overlays exact ED,
+CS-HF/MP2, LF-HF/MP2, and the original and augmented MR-LF curves, with a
+separate pre-break energy-error panel. The new MR-LF calculation uses no MP2
+correction; LF-MP2 is shown only as a comparison. The fixed transferred orbit
+reduces the pre-break MR-LF error but does not close the exact gap, especially
+at weak coupling. The space definition, numerical table, and limits are in
+`docs/fig2b_mr_broken_seed_scan.md`.
+
 To examine how the number of LF frames and the retained overlap rank affect
 the energy at the coupling where LF-HF differs most from exact ED, run:
 
