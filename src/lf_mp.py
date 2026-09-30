@@ -1,9 +1,11 @@
 """Lang--Firsov mean-field reference and perturbative corrections."""
 
 import math
+from itertools import combinations
 
 import numpy as np
 from scipy import optimize as scipy_optimize
+from scipy import linalg as scipy_linalg
 
 from .cs_mp import cs_site_density
 
@@ -1429,12 +1431,87 @@ def lf_hf_multi_fixed_energy(
     lam: np.ndarray,
     shift: np.ndarray,
 ) -> tuple[float, np.ndarray]:
-    """Return (energy, spin_density) for a fixed unrestricted LF reference."""
+    """Evaluate a fixed unrestricted LF-HF reference in the site basis.
+
+    The local Hubbard--Holstein coupling is ``g * n[x] * (b[x] + b[x]^dag)``
+    without a density offset. There is one phonon mode per site. This
+    function evaluates supplied orbitals and full LF parameters; it does
+    not optimize them.
+
+    Parameters
+    ----------
+    tmat
+        Real symmetric site-basis hopping matrix ``tmat[p, q]`` with shape
+        ``(L, L)`` and dtype ``float64``.
+    U, g, omega
+        Finite real on-site repulsion, local electron--phonon coupling,
+        and positive phonon frequency, respectively.
+    nelec
+        Fixed electron counts ``(neleca, nelecb)``, each between 0 and L.
+    occ_a, occ_b
+        Real orthonormal occupied-orbital columns ``occ_sigma[p, i]`` in
+        the site basis, with shapes ``(L, neleca)`` and ``(L, nelecb)``
+        and dtype ``float64``.
+    lam
+        Full real LF displacement matrix ``lam[x, p]``, with mode row x
+        and site column p; shape ``(L, L)``, dtype ``float64``.
+    shift
+        Real coherent displacement ``shift[x]``; shape ``(L,)``, dtype
+        ``float64``.
+
+    Returns
+    -------
+    energy
+        Total LF-HF expectation value for this fixed reference.
+    spin_density
+        Site density with shape ``(2, L)`` and index order
+        ``spin_density[spin, p]``; spin 0 is alpha and spin 1 beta.
+
+    Notes
+    -----
+    At fixed positive total electron number, adding the same ``c[x]`` to
+    every ``lam[x, p]`` and ``N_e * c[x]`` to ``shift[x]`` leaves the
+    represented state invariant. Fixing ``shift=0`` is one possible gauge
+    for the full LF matrix.
+    """
+    if (not isinstance(tmat, np.ndarray) or tmat.ndim != 2
+            or tmat.shape[0] == 0 or tmat.shape[0] != tmat.shape[1]):
+        raise ValueError("tmat must have nonempty square shape (L, L)")
+    L = tmat.shape[0]
+    if (not isinstance(nelec, tuple) or len(nelec) != 2
+            or any(isinstance(n, (bool, np.bool_))
+                   or not isinstance(n, (int, np.integer))
+                   or n < 0 or n > L for n in nelec)):
+        raise ValueError("nelec must be a tuple (neleca, nelecb) with 0 <= n <= L")
+    for name, array, shape in (
+        ("tmat", tmat, (L, L)),
+        ("occ_a", occ_a, (L, nelec[0])),
+        ("occ_b", occ_b, (L, nelec[1])),
+        ("lam", lam, (L, L)),
+        ("shift", shift, (L,)),
+    ):
+        if (not isinstance(array, np.ndarray) or array.shape != shape
+                or array.dtype != np.float64 or not np.all(np.isfinite(array))):
+            raise ValueError(f"{name} must be a finite float64 array with shape {shape}")
+    if not np.allclose(tmat, tmat.T, rtol=0.0, atol=1e-12):
+        raise ValueError("tmat must be symmetric")
+    for name, occupied in (("occ_a", occ_a), ("occ_b", occ_b)):
+        if not np.allclose(occupied.T @ occupied,
+                           np.eye(occupied.shape[1]), rtol=0.0, atol=1e-10):
+            raise ValueError(f"{name} columns must be orthonormal")
+    for name, value in (("U", U), ("g", g), ("omega", omega)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value)):
+            raise ValueError(f"{name} must be a finite real scalar")
+    if omega <= 0:
+        raise ValueError("omega must be positive")
     D_a = occ_a @ occ_a.T
     D_b = occ_b @ occ_b.T
     rho_a = np.diag(D_a)
     rho_b = np.diag(D_b)
     rho = rho_a + rho_b
+    rho_joint = np.stack((rho_a, rho_b), axis=0)
     n_orb = tmat.shape[0]
     Q = np.zeros((n_orb, n_orb))
     for p in range(n_orb):
@@ -1446,7 +1523,574 @@ def lf_hf_multi_fixed_energy(
             S[p, q] = np.exp(-0.5 * np.sum((lam[:,p]-lam[:,q])**2))
     E_t = np.sum(tmat * S * (D_a + D_b).T)
     E_U = U * np.sum(rho_a * rho_b)
-    E_ph = omega * np.sum(shift**2 - 2 * shift* np.sum(lam @ rho, axis=1) + np.sum(lam @ Q @ lam.T))
+    E_ph = omega * (shift.T @ shift - 2 * shift.T @ lam @ rho + np.trace(lam @ Q @ lam.T))
     E_ep = 2 * g * np.sum(shift*rho - np.sum(lam * Q, axis=1))
     E = E_t + E_U + E_ph + E_ep
-    return E, rho_a - rho_b
+    return E, rho_joint
+
+
+def lf_hf_multi_fixed_fock(
+    tmat: np.ndarray,
+    U: float,
+    g: float,
+    omega: float,
+    nelec: tuple[int, int],
+    occ_a: np.ndarray,
+    occ_b: np.ndarray,
+    lam: np.ndarray,
+    shift: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build spin-resolved site-basis Fock matrices for a fixed LF reference.
+
+    This is the derivative of ``lf_hf_multi_fixed_energy`` with respect to
+    each spin density matrix while ``lam`` and ``shift`` remain fixed. It
+    uses the paper's uncentered local Hubbard--Holstein coupling and one
+    phonon mode per site. It does not optimize the occupied orbitals.
+
+    Parameters
+    ----------
+    tmat
+        Real symmetric site-basis hopping matrix ``tmat[p, q]``, shape
+        ``(L, L)``, dtype ``float64``.
+    U, g, omega
+        Finite real on-site repulsion and local coupling, followed by a
+        positive phonon frequency.
+    nelec
+        Fixed counts ``(neleca, nelecb)``, each between 0 and L.
+    occ_a, occ_b
+        Real orthonormal occupied-orbital columns ``occ_sigma[p, i]`` in
+        the site basis; shapes ``(L, neleca)`` and ``(L, nelecb)`` and
+        dtype ``float64``.
+    lam
+        Full real LF matrix ``lam[x, p]`` with mode row and site column;
+        shape ``(L, L)``, dtype ``float64``.
+    shift
+        Real coherent displacement ``shift[x]``, shape ``(L,)``, dtype
+        ``float64``.
+
+    Returns
+    -------
+    F_a, F_b
+        Real symmetric Fock matrices for alpha and beta electrons, each
+        with shape ``(L, L)`` and site index order ``[p, q]``.
+    """
+    if (not isinstance(tmat, np.ndarray) or tmat.ndim != 2
+            or tmat.shape[0] == 0 or tmat.shape[0] != tmat.shape[1]):
+        raise ValueError("tmat must have nonempty square shape (L, L)")
+    L = tmat.shape[0]
+    if (not isinstance(nelec, tuple) or len(nelec) != 2
+            or any(isinstance(n, (bool, np.bool_))
+                   or not isinstance(n, (int, np.integer))
+                   or n < 0 or n > L for n in nelec)):
+        raise ValueError("nelec must be a tuple (neleca, nelecb) with 0 <= n <= L")
+    for name, array, shape in (
+        ("tmat", tmat, (L, L)),
+        ("occ_a", occ_a, (L, nelec[0])),
+        ("occ_b", occ_b, (L, nelec[1])),
+        ("lam", lam, (L, L)),
+        ("shift", shift, (L,)),
+    ):
+        if (not isinstance(array, np.ndarray) or array.shape != shape
+                or array.dtype != np.float64 or not np.all(np.isfinite(array))):
+            raise ValueError(f"{name} must be a finite float64 array with shape {shape}")
+    if not np.allclose(tmat, tmat.T, rtol=0.0, atol=1e-12):
+        raise ValueError("tmat must be symmetric")
+    for name, occupied in (("occ_a", occ_a), ("occ_b", occ_b)):
+        if not np.allclose(occupied.T @ occupied,
+                           np.eye(occupied.shape[1]), rtol=0.0, atol=1e-10):
+            raise ValueError(f"{name} columns must be orthonormal")
+    for name, value in (("U", U), ("g", g), ("omega", omega)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value)):
+            raise ValueError(f"{name} must be a finite real scalar")
+    if omega <= 0:
+        raise ValueError("omega must be positive")
+    D_a = occ_a @ occ_a.T
+    D_b = occ_b @ occ_b.T
+    rho = np.diag(D_a) + np.diag(D_b)
+    G = lam.T @ lam
+    d = np.diag(G)
+    S = np.exp(-0.5 * (d[:, None] + d[None, :] - 2 * G))
+    h = tmat * S
+    A = omega * G - g * (lam + lam.T)
+    v = 2 * g * shift - 2 * omega * lam.T @ shift
+    F_a = h + np.diag(v + np.diag(A) + 2 * A @ rho + U * np.diag(D_b)) - 2 * A * D_a
+    F_b = h + np.diag(v + np.diag(A) + 2 * A @ rho + U * np.diag(D_a)) - 2 * A * D_b
+    return F_a, F_b
+
+
+def lf_hf_multi_optimize(
+    tmat: np.ndarray,
+    U: float,
+    g: float,
+    omega: float,
+    nelec: tuple[int, int],
+    mo_coeff_a0: np.ndarray,
+    mo_coeff_b0: np.ndarray,
+    lam0: np.ndarray,
+    *,
+    gtol: float = 1e-6,
+    max_cycle: int = 1000,
+) -> scipy_optimize.OptimizeResult:
+    """Jointly optimize unrestricted orbitals and the full LF matrix.
+
+    This is the unrestricted LF-HF variational problem. The coherent shift is
+    fixed to zero. Occupied orbitals are the first ``nelec[spin]`` columns
+    of each full site-basis orbital matrix. Neither the input orbitals nor
+    ``lam0`` are modified.
+
+    Parameters
+    ----------
+    tmat
+        Real symmetric site-basis hopping matrix, shape ``(L, L)``,
+        dtype ``float64``.
+    U, g, omega
+        Finite real Hubbard repulsion and local coupling, followed by a
+        positive phonon frequency.
+    nelec
+        Electron counts ``(neleca, nelecb)``, each between zero and L.
+    mo_coeff_a0, mo_coeff_b0
+        Initial full real orthogonal orbital matrices, each with shape
+        ``(L, L)`` and dtype ``float64``; row is site, column is MO.
+    lam0
+        Initial full LF matrix ``lam0[x, p]``, shape ``(L, L)`` and
+        dtype ``float64``; x is phonon mode, p is electronic site.
+    gtol
+        Positive BFGS gradient tolerance for the joint parameter vector.
+    max_cycle
+        Positive maximum number of BFGS iterations per start.
+
+    Returns
+    -------
+    scipy.optimize.OptimizeResult
+        ``fun`` is the variational LF-HF energy. ``mo_coeff`` and
+        ``mo_energy`` have shapes ``(2, L, L)`` and ``(2, L)`` with alpha
+        before beta; occupied MOs precede virtual MOs. ``mo_occ`` has
+        shape ``(2, L)`` and contains zeros and ones. ``lam`` has shape
+        ``(L, L)``, ``shift`` is the zero vector of length L, and
+        ``spin_density`` has shape ``(2, L)``. Also return ``nit``,
+        ``orbital_grad_norm``, ``lam_grad_max``, ``success``, and ``message``.
+        A numerical optimizer status alone does not establish success:
+        the final physical orbital and LF parameter residuals must pass.
+    """
+    if (not isinstance(tmat, np.ndarray) or tmat.ndim != 2
+            or tmat.shape[0] == 0 or tmat.shape[0] != tmat.shape[1]):
+        raise ValueError("tmat must have nonempty square shape (L, L)")
+    L = tmat.shape[0]
+    if (not isinstance(nelec, tuple) or len(nelec) != 2
+            or any(isinstance(n, (bool, np.bool_))
+                   or not isinstance(n, (int, np.integer))
+                   or n < 0 or n > L for n in nelec)):
+        raise ValueError("nelec must be a tuple (neleca, nelecb) with 0 <= n <= L")
+    for name, coeff in (("mo_coeff_a0", mo_coeff_a0),
+                        ("mo_coeff_b0", mo_coeff_b0)):
+        if (not isinstance(coeff, np.ndarray) or coeff.shape != (L, L)
+                or coeff.dtype != np.float64
+                or not np.all(np.isfinite(coeff))):
+            raise ValueError(f"{name} must be a finite float64 array with shape {(L, L)}")
+        if not np.allclose(coeff.T @ coeff, np.eye(L), rtol=0.0, atol=1e-10):
+            raise ValueError(f"{name} columns must be orthonormal")
+    # Reuse the accepted fixed-reference checks for model data and lam0.
+    lf_hf_multi_fixed_fock(
+        tmat, U, g, omega, nelec,
+        mo_coeff_a0[:, :nelec[0]], mo_coeff_b0[:, :nelec[1]],
+        lam0, np.zeros(L, dtype=np.float64),
+    )
+    if (isinstance(gtol, (bool, np.bool_))
+            or not isinstance(gtol, (int, float, np.integer, np.floating))
+            or not np.isfinite(gtol) or gtol <= 0):
+        raise ValueError("gtol must be a finite positive real scalar")
+    if (isinstance(max_cycle, (bool, np.bool_))
+            or not isinstance(max_cycle, (int, np.integer)) or max_cycle <= 0):
+        raise ValueError("max_cycle must be a positive integer")
+    na, nb = nelec
+    nrot_a = na * (L - na)
+    nrot_b = nb * (L - nb)
+    x0 = np.r_[np.zeros(nrot_a + nrot_b), lam0.ravel()]
+
+    def unpack(x):
+        kappa_a = x[:nrot_a].reshape(L - na, na)
+        kappa_b = x[nrot_a:nrot_a + nrot_b].reshape(L - nb, nb)
+        lam = x[nrot_a + nrot_b:].reshape(L, L)
+
+        K_a = np.zeros((L, L), dtype=np.float64)
+        K_b = np.zeros((L, L), dtype=np.float64)
+        K_a[na:, :na] = kappa_a
+        K_a[:na, na:] = -kappa_a.T
+        K_b[nb:, :nb] = kappa_b
+        K_b[:nb, nb:] = -kappa_b.T
+
+        # A line search can sample very large rotations. Polar projection
+        # removes accumulated matrix-exponential roundoff without changing
+        # the exact orthogonal rotation represented by exp(K).
+        rotation_a, _ = scipy_linalg.polar(scipy_linalg.expm(K_a))
+        rotation_b, _ = scipy_linalg.polar(scipy_linalg.expm(K_b))
+        C_a = mo_coeff_a0 @ rotation_a
+        C_b = mo_coeff_b0 @ rotation_b
+        return C_a, C_b, lam
+
+    shift = np.zeros(L, dtype=np.float64)
+
+    def cost(x):
+        try:
+            C_a, C_b, lam = unpack(x)
+            energy, _ = lf_hf_multi_fixed_energy(
+                tmat, U, g, omega, nelec,
+                C_a[:, :na], C_b[:, :nb], lam, shift,
+            )
+        except (ValueError, FloatingPointError):
+            return 1e100
+        return energy if np.isfinite(energy) else 1e100
+
+    result = scipy_optimize.minimize(
+        cost, x0, method="BFGS", jac="3-point",
+        options={"gtol": gtol, "maxiter": max_cycle},
+    )
+    C_a, C_b, lam = unpack(result.x)
+    energy, spin_density = lf_hf_multi_fixed_energy(
+        tmat, U, g, omega, nelec, C_a[:, :na], C_b[:, :nb], lam, shift,
+    )
+    F_a, F_b = lf_hf_multi_fixed_fock(
+        tmat, U, g, omega, nelec, C_a[:, :na], C_b[:, :nb], lam, shift,
+    )
+    D_a = C_a[:, :na] @ C_a[:, :na].T
+    D_b = C_b[:, :nb] @ C_b[:, :nb].T
+    orbital_grad_norm = np.hypot(
+        np.linalg.norm(F_a @ D_a - D_a @ F_a),
+        np.linalg.norm(F_b @ D_b - D_b @ F_b),
+    )
+
+    rho = np.diag(D_a + D_b)
+    Q = np.outer(rho, rho) - D_a * D_a - D_b * D_b + np.diag(rho)
+    G = lam.T @ lam
+    diag_G = np.diag(G)
+    S = np.exp(-0.5 * (diag_G[:, None] + diag_G[None, :] - 2 * G))
+    W = tmat * S * (D_a + D_b)
+    lam_gradient = (-2 * (lam * W.sum(axis=1)[None, :] - lam @ W)
+                    + 2 * omega * lam @ Q - 2 * g * Q)
+    lam_grad_max = float(np.max(np.abs(lam_gradient)))
+
+    def canonicalize(coeff, fock, nocc):
+        fock_mo = coeff.T @ fock @ coeff
+        occupied_energy, occupied_rotation = np.linalg.eigh(
+            fock_mo[:nocc, :nocc]
+        )
+        virtual_energy, virtual_rotation = np.linalg.eigh(
+            fock_mo[nocc:, nocc:]
+        )
+        rotation = scipy_linalg.block_diag(
+            occupied_rotation, virtual_rotation
+        )
+        return coeff @ rotation, np.r_[occupied_energy, virtual_energy]
+
+    C_a, eps_a = canonicalize(C_a, F_a, na)
+    C_b, eps_b = canonicalize(C_b, F_b, nb)
+    energy_check, spin_density_check = lf_hf_multi_fixed_energy(
+        tmat, U, g, omega, nelec, C_a[:, :na], C_b[:, :nb], lam, shift,
+    )
+    energy_consistent = bool(
+        np.isfinite(energy_check)
+        and abs(energy_check - result.fun) <= 1e-9
+        and np.allclose(spin_density_check, spin_density, atol=1e-10, rtol=0)
+    )
+    residual_ok = bool(
+        np.isfinite(orbital_grad_norm) and np.isfinite(lam_grad_max)
+        and orbital_grad_norm <= 1e-5 and lam_grad_max <= 1e-5
+    )
+    result.optimizer_success = bool(result.success)
+    result.residual_ok = residual_ok
+    result.energy_consistent = energy_consistent
+    result.success = bool(result.optimizer_success and residual_ok
+                          and energy_consistent)
+    result.mo_coeff = np.stack((C_a, C_b))
+    result.mo_energy = np.stack((eps_a, eps_b))
+    result.mo_occ = np.stack((np.arange(L) < na, np.arange(L) < nb)).astype(np.float64)
+    result.lam = lam.copy()
+    result.shift = shift.copy()
+    result.spin_density = spin_density_check
+    result.orbital_grad_norm = float(orbital_grad_norm)
+    result.lam_grad_max = lam_grad_max
+    return result
+
+
+
+def lf_mp2_unrestricted_reference_point(
+    tmat: np.ndarray,
+    U: float,
+    g: float,
+    omega: float,
+    nelec: tuple[int, int],
+    mo_coeff: np.ndarray,
+    mo_energy: np.ndarray,
+    lam: np.ndarray,
+    shift: np.ndarray,
+    *,
+    max_total: int,
+    max_excited_modes: int = 2,
+    denominator_tol: float = 1e-10,
+) -> dict[str, object]:
+    """Evaluate LF-MP2 on a fixed unrestricted LF-HF reference.
+
+    Supports any positive number of sites and any alpha/beta electron counts.
+    The local model has one phonon mode per site. For a non-vacuum phonon
+    configuration the transformed Hamiltonian couples the reference only to
+    itself and electronic singles; zero-phonon doubles arise from the static
+    transformed density interaction. All orbital arrays are real float64.
+
+    Parameters
+    ----------
+    tmat, U, g, omega, nelec
+        Model data in the same convention as lf_hf_multi_fixed_energy.
+    mo_coeff
+        Canonical full alpha/beta orbital matrices, shape (2, L, L), with
+        occupied orbitals before virtual orbitals.
+    mo_energy
+        Corresponding spin orbital energies, shape (2, L).
+    lam, shift
+        Full LF matrix of shape (L, L) and coherent displacement of shape
+        (L,). The gauge-fixed optimizer returns a zero shift.
+    max_total
+        Inclusive total phonon occupation cutoff. Polar's nph=9 means 8.
+    max_excited_modes
+        Maximum number of modes with nonzero occupation; 2 follows Polar.
+    denominator_tol
+        Any excitation energy at or below this positive threshold raises
+        ValueError instead of entering the MP2 sum.
+
+    Returns
+    -------
+    dict
+        HF, separate MP2 channel corrections, total energy, phonon
+        configurations, smallest positive denominator, and channel counts.
+    """
+    if not isinstance(tmat, np.ndarray) or tmat.ndim != 2:
+        raise ValueError("tmat must be a square float64 array")
+    L = tmat.shape[0]
+    if (not isinstance(mo_coeff, np.ndarray)
+            or mo_coeff.shape != (2, L, L)
+            or mo_coeff.dtype != np.float64
+            or not np.all(np.isfinite(mo_coeff))):
+        raise ValueError("mo_coeff must be finite float64 with shape (2, L, L)")
+    if (not isinstance(mo_energy, np.ndarray)
+            or mo_energy.shape != (2, L)
+            or mo_energy.dtype != np.float64
+            or not np.all(np.isfinite(mo_energy))):
+        raise ValueError("mo_energy must be finite float64 with shape (2, L)")
+    for coeff in mo_coeff:
+        if not np.allclose(coeff.T @ coeff, np.eye(L), atol=1e-10, rtol=0):
+            raise ValueError("mo_coeff columns must be orthonormal")
+    if (isinstance(max_total, (bool, np.bool_))
+            or not isinstance(max_total, (int, np.integer))
+            or max_total < 1):
+        raise ValueError("max_total must be a positive integer")
+    if (isinstance(max_excited_modes, (bool, np.bool_))
+            or not isinstance(max_excited_modes, (int, np.integer))
+            or max_excited_modes < 1):
+        raise ValueError("max_excited_modes must be a positive integer")
+    if (isinstance(denominator_tol, (bool, np.bool_))
+            or not isinstance(denominator_tol, (int, float, np.integer, np.floating))
+            or not np.isfinite(denominator_tol) or denominator_tol <= 0):
+        raise ValueError("denominator_tol must be finite and positive")
+
+    if (not isinstance(nelec, tuple) or len(nelec) != 2
+            or any(isinstance(n, (bool, np.bool_))
+                   or not isinstance(n, (int, np.integer))
+                   or n < 0 or n > L for n in nelec)):
+        raise ValueError("nelec must be two electron counts between zero and L")
+    na, nb = nelec
+    hf_energy, _ = lf_hf_multi_fixed_energy(
+        tmat, U, g, omega, nelec,
+        mo_coeff[0, :, :na], mo_coeff[1, :, :nb], lam, shift,
+    )
+    fock = lf_hf_multi_fixed_fock(
+        tmat, U, g, omega, nelec,
+        mo_coeff[0, :, :na], mo_coeff[1, :, :nb], lam, shift,
+    )
+    fock_mo = np.stack([
+        mo_coeff[s].T @ fock[s] @ mo_coeff[s] for s in range(2)
+    ])
+    for s, nocc in enumerate(nelec):
+        for block in (fock_mo[s, :nocc, :nocc],
+                      fock_mo[s, nocc:, nocc:]):
+            if np.max(np.abs(block - np.diag(np.diag(block))), initial=0.0) > 1e-7:
+                raise ValueError("occupied and virtual Fock blocks must be canonical")
+        if np.max(np.abs(np.diag(fock_mo[s]) - mo_energy[s]), initial=0.0) > 1e-7:
+            raise ValueError("mo_energy must match the canonical Fock diagonal")
+
+    # For one electron the exact zero-phonon Hamiltonian defines the
+    # perturbative orbital energies, as in the existing Fig. 2b routine.
+    # Its virtual spectrum can differ from the unrestricted Fock spectrum.
+    mo_coeff = mo_coeff.copy()
+    mo_energy = mo_energy.copy()
+    fock_mo = fock_mo.copy()
+    if na + nb == 1:
+        active_spin = 0 if na else 1
+        effective = lf_effective_one_body(tmat, g, omega, shift, lam)
+        effective_energy, effective_coeff = np.linalg.eigh(effective)
+        overlap = abs(np.dot(effective_coeff[:, 0], mo_coeff[active_spin, :, 0]))
+        if overlap < 1 - 1e-5:
+            raise ValueError("one-electron reference is not the lowest effective orbital")
+        mo_coeff[active_spin] = effective_coeff
+        mo_energy[active_spin] = effective_energy
+        fock_mo[active_spin] = np.diag(effective_energy)
+
+    occupations = lf_total_phonon_configurations(L, max_total)
+    occupations = occupations[
+        np.count_nonzero(occupations, axis=1) <= max_excited_modes
+    ]
+    totals = occupations.sum(axis=1)
+    site_couplings = lf_vacuum_coupling_site_matrices(
+        tmat, g, omega, shift, lam, occupations,
+    )
+    mo_couplings = np.stack([
+        np.einsum("pi,kpq,qj->kij", mo_coeff[s], site_couplings,
+                  mo_coeff[s], optimize=True)
+        for s in range(2)
+    ])
+    pure_amplitudes = np.zeros(len(occupations), dtype=np.float64)
+    phonon_single_correction = 0.0
+    zero_single_correction = 0.0
+    minimum_denominator = float(omega)
+    single_count = 0
+
+    for s, nocc in enumerate(nelec):
+        pure_amplitudes += np.trace(
+            mo_couplings[s, :, :nocc, :nocc], axis1=1, axis2=2,
+        )
+        virtual_energies = mo_energy[s, nocc:]
+        occupied_energies = mo_energy[s, :nocc]
+        gap = virtual_energies[None, :] - occupied_energies[:, None]
+        if gap.size:
+            smallest_gap = float(np.min(gap))
+            minimum_denominator = min(minimum_denominator, smallest_gap)
+            if smallest_gap <= denominator_tol:
+                raise ValueError(
+                    f"nonpositive or near-zero electronic single denominator: {smallest_gap}"
+                )
+            phonon_denominator = gap[None, :, :] + omega * totals[:, None, None]
+            amplitudes = mo_couplings[s, :, nocc:, :nocc].transpose(0, 2, 1)
+            phonon_single_correction -= float(
+                np.sum(np.abs(amplitudes)**2 / phonon_denominator)
+            )
+            zero_amplitudes = fock_mo[s, nocc:, :nocc].T
+            zero_single_correction -= float(
+                np.sum(np.abs(zero_amplitudes)**2 / gap)
+            )
+            single_count += nocc * (L - nocc)
+
+    phonon_pure_correction = -float(
+        np.sum(np.abs(pure_amplitudes)**2 / (omega * totals))
+    )
+
+    # Site determinant vectors provide the static two-body matrix elements
+    # without spin-dependent exchange or excitation-sign bookkeeping.
+    site_strings = [
+        (np.empty((1, 0), dtype=np.int64) if n == 0 else
+         np.asarray(list(combinations(range(L), n)), dtype=np.int64).reshape(-1, n))
+        for n in nelec
+    ]
+    site_bits = []
+    for strings in site_strings:
+        bits = np.zeros((len(strings), L), dtype=np.float64)
+        bits[np.arange(len(strings))[:, None], strings] = 1.0
+        site_bits.append(bits)
+    nsite = site_bits[0][:, None, :] + site_bits[1][None, :, :]
+    G = lam.T @ lam
+    A = omega * G - g * (lam + lam.T)
+    site_potential = (
+        np.einsum("abp,pq,abq->ab", nsite, A, nsite, optimize=True)
+        + U * (site_bits[0] @ site_bits[1].T)
+    )
+
+    def determinant_vector(spin, occupied_mos):
+        nocc = nelec[spin]
+        if nocc == 0:
+            return np.ones(1, dtype=np.float64)
+        coeff = mo_coeff[spin]
+        return np.linalg.det(
+            coeff[site_strings[spin]][:, :, occupied_mos]
+        )
+
+    references = [
+        determinant_vector(s, tuple(range(nelec[s]))) for s in range(2)
+    ]
+    transitions = [{tuple(range(nelec[s])): references[s]**2}
+                   for s in range(2)]
+
+    def transition(spin, occupied_mos):
+        occupied_mos = tuple(occupied_mos)
+        if occupied_mos not in transitions[spin]:
+            transitions[spin][occupied_mos] = (
+                determinant_vector(spin, occupied_mos) * references[spin]
+            )
+        return transitions[spin][occupied_mos]
+
+    def excited_occ(spin, holes, particles):
+        return tuple(sorted(
+            (set(range(nelec[spin])) - set(holes)) | set(particles)
+        ))
+
+    def double_term(holes_a, particles_a, holes_b, particles_b):
+        delta = (
+            np.sum(mo_energy[0, list(particles_a)])
+            - np.sum(mo_energy[0, list(holes_a)])
+            + np.sum(mo_energy[1, list(particles_b)])
+            - np.sum(mo_energy[1, list(holes_b)])
+        )
+        return float(delta), float(np.einsum(
+            "a,ab,b->", transition(0, excited_occ(0, holes_a, particles_a)),
+            site_potential, transition(1, excited_occ(1, holes_b, particles_b)),
+            optimize=True,
+        ))
+
+    zero_double_correction = 0.0
+    double_count = 0
+    for s, nocc in enumerate(nelec):
+        for holes in combinations(range(nocc), 2):
+            for particles in combinations(range(nocc, L), 2):
+                args = (holes, particles, (), ()) if s == 0 else (
+                    (), (), holes, particles
+                )
+                denominator, amplitude = double_term(*args)
+                minimum_denominator = min(minimum_denominator, denominator)
+                if denominator <= denominator_tol:
+                    raise ValueError(
+                        f"nonpositive or near-zero electronic double denominator: {denominator}"
+                    )
+                zero_double_correction -= amplitude**2 / denominator
+                double_count += 1
+    for hole_a in range(na):
+        for particle_a in range(na, L):
+            for hole_b in range(nb):
+                for particle_b in range(nb, L):
+                    denominator, amplitude = double_term(
+                        (hole_a,), (particle_a,), (hole_b,), (particle_b,)
+                    )
+                    minimum_denominator = min(minimum_denominator, denominator)
+                    if denominator <= denominator_tol:
+                        raise ValueError(
+                            f"nonpositive or near-zero electronic double denominator: {denominator}"
+                        )
+                    zero_double_correction -= amplitude**2 / denominator
+                    double_count += 1
+
+    mp2_correction = (
+        phonon_pure_correction + phonon_single_correction
+        + zero_single_correction + zero_double_correction
+    )
+    return {
+        "hf_energy": float(hf_energy),
+        "mp2_correction": float(mp2_correction),
+        "total_energy": float(hf_energy + mp2_correction),
+        "phonon_pure_correction": phonon_pure_correction,
+        "phonon_single_correction": phonon_single_correction,
+        "zero_single_correction": zero_single_correction,
+        "zero_double_correction": float(zero_double_correction),
+        "occupations": occupations,
+        "max_total": int(max_total),
+        "max_excited_modes": int(max_excited_modes),
+        "minimum_denominator": float(minimum_denominator),
+        "zero_single_count": single_count,
+        "zero_double_count": double_count,
+    }
