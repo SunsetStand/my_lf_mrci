@@ -620,3 +620,76 @@ def lf_noci_score_orbits(
         candidate_energy[j] = trial_energy
         candidate_rank[j] = trial_rank
     return base_energy, base_rank, candidate_energy, candidate_rank
+
+
+def _validate_multi_frame_inputs(
+    lam: np.ndarray,
+    shift: np.ndarray,
+    nelec: tuple[int, int],
+) -> tuple[int, int]:
+    """Validate multi-electron LF frames and return ``(nframe, nsite)``.
+
+    ``lam[A, x, p]`` has frame, phonon-mode, and electron-site indices;
+    ``shift[A, x]`` has frame and phonon-mode indices. Both are finite
+    float64 arrays. ``nelec`` gives fixed alpha and beta electron counts.
+    This helper performs no model contraction and does not alter inputs.
+    """
+    if (not isinstance(lam, np.ndarray) or lam.ndim != 3
+            or lam.shape[0] == 0 or lam.shape[1] == 0
+            or lam.shape[1] != lam.shape[2]):
+        raise ValueError("lam must have nonempty shape (K, L, L)")
+    nframe, nsite, _ = lam.shape
+    if not isinstance(shift, np.ndarray) or shift.shape != (nframe, nsite):
+        raise ValueError("shift must have shape (K, L)")
+    if lam.dtype != np.float64 or shift.dtype != np.float64:
+        raise TypeError("lam and shift must have float64 dtype")
+    if not np.all(np.isfinite(lam)) or not np.all(np.isfinite(shift)):
+        raise ValueError("lam and shift must contain only finite values")
+    if (not isinstance(nelec, tuple) or len(nelec) != 2
+            or any(isinstance(n, (bool, np.bool_))
+                   or not isinstance(n, (int, np.integer))
+                   or n < 0 or n > nsite for n in nelec)):
+        raise ValueError("nelec must be (neleca, nelecb), each between 0 and L")
+    return nframe, nsite
+
+
+def lf_multi_frame_overlap(
+    lam: np.ndarray,
+    shift: np.ndarray,
+    nelec: tuple[int, int],
+) -> np.ndarray:
+    """Return the site-determinant Gram tensor of multi-electron LF frames.
+
+    A frame consists of an orthonormal site determinant and its conditional
+    multimode coherent state. The local coupling is uncentered. The alpha
+    and beta determinant addresses follow ``make_electron_basis`` order.
+
+    Parameters
+    ----------
+    lam
+        Full LF matrices with shape ``(K, L, L)`` and index order
+        ``[frame A, phonon mode x, electron site p]``; finite float64.
+    shift
+        Coherent shifts with shape ``(K, L)`` and order ``[A, x]``;
+        finite float64.
+    nelec
+        Fixed electron counts ``(neleca, nelecb)`` with each count from
+        zero through L.
+
+    Returns
+    -------
+    numpy.ndarray
+        Real Gram tensor with shape ``(K, nstra, nstrb, K, nstra, nstrb)``
+        and index order ``[A, ia, ib, B, ja, jb]``, where
+        ``nstr_sigma = comb(L, nelec_sigma)``. The tensor retains separate
+        alpha and beta determinant axes. Its diagonal frame blocks are
+        identity matrices on the site determinant space.
+
+    Notes
+    -----
+    This is the multi-electron extension of ``lf_frame_overlap``. It is
+    independent of the phonon Fock cutoff. The corresponding Hamiltonian
+    kernel will use the same conditional coherent displacements.
+    """
+    nframe, nsite = _validate_multi_frame_inputs(lam, shift, nelec)
+    raise NotImplementedError("Student task pending: implement the LF-MR overlap")
