@@ -1,5 +1,7 @@
 import numpy as np
 
+from src import my_direct_ep
+
 
 def lf_frame_overlap(
     lam: np.ndarray,
@@ -157,86 +159,98 @@ def lf_noci_lowest(
     *,
     overlap_cut: float = 1e-10,
 ) -> tuple[float, np.ndarray, int]:
-    """Solve the lowest NOCI state after canonical overlap orthogonalization.
+    """Solve a single- or multi-electron NOCI problem by orthogonalization.
 
-    The four-index kernels are flattened only at this solver boundary
-    using ``a = A*L + p``.  Eigenvectors of the overlap below
-    ``overlap_cut * max(1, s_max)`` are discarded.  In the retained
-    subspace, the function diagonalizes ``X.T @ H @ X`` with
-    ``X.T @ S @ X = I``.  It does not alter the input kernels.
+    Kernels are flattened in C order only at this solver boundary. The
+    basis address is A*L+p for four-index input, or
+    (A*nstra+ia)*nstrb+ib for six-index input. Overlap eigenvectors are
+    retained when their eigenvalue exceeds overlap_cut * max(1, s_max).
+    The retained basis X satisfies X.T @ S @ X = I; the electronic and
+    phonon model is entirely specified by the supplied H and S kernels.
 
     Parameters
     ----------
     hmat
-        Finite symmetric float64 Hamiltonian kernel with shape
-        ``(K, L, K, L)`` and index order ``[A, p, B, q]``.
+        Finite symmetric float64 Hamiltonian kernel. Supported shapes are
+        (K, L, K, L), with indices [A, p, B, q], and
+        (K, nstra, nstrb, K, nstra, nstrb), with indices
+        [A, ia, ib, B, ja, jb]. All dimensions must be positive.
     smat
-        Finite symmetric float64 Gram kernel with the same shape and
-        index order.  It may be singular when frames are repeated.
+        Finite symmetric float64 Gram kernel with exactly the same shape
+        and ordering as hmat. Repeated frames may make it singular.
     overlap_cut
-        Finite positive relative cutoff.  An overlap eigenvalue is
-        retained only if it exceeds
-        ``overlap_cut * max(1, s_max)``.
+        Finite positive real scalar controlling retained overlap rank.
+        Substantially negative overlap eigenvalues are rejected using
+        the same threshold as in the existing single-electron solver.
 
     Returns
     -------
     energy
-        Lowest variational energy in the retained span.
+        Lowest variational energy in the retained span, as a Python float.
     coeff
-        Real CI coefficients with shape ``(K, L)``, ordered as
-        ``[frame, electron site]`` and normalized by
-        ``coeff.ravel() @ S @ coeff.ravel() = 1``.  Their overall
-        sign is arbitrary; individual squared entries are not
-        probabilities in this nonorthogonal basis.
+        Float64 CI coefficients with shape (K, L) for four-index input or
+        (K, nstra, nstrb) for six-index input. They obey
+        coeff.ravel() @ S @ coeff.ravel() = 1. Their overall sign is
+        arbitrary; individual squared entries are not probabilities in
+        this nonorthogonal basis.
     rank
-        Number of overlap eigenvectors retained after cutoff.
+        Number of retained overlap eigenvectors, as a Python int.
 
     Raises
     ------
     ValueError
-        If dimensions, finite values, symmetry, cutoff, or the Gram
-        matrix spectrum violate the solver contract.
+        If shapes, finite values, symmetry, cutoff, or the overlap
+        spectrum violate the solver contract.
     TypeError
-        If either kernel does not have float64 dtype.
+        If either kernel is not a NumPy array with float64 dtype.
 
     Notes
     -----
-    When near-dependent directions are discarded, the generalized
-    residual projected into the retained span is the relevant solver
-    check.  The full coordinate residual may be larger.
+    No input arrays are modified. After overlap truncation, the relevant
+    generalized residual is projected into the retained subspace. The
+    full coordinate residual can be larger. This is a dense solver: its
+    matrix dimension is K*L or K*nstra*nstrb. No lattice size, electron
+    count, coupling convention, or model parameter is hard-coded here.
     """
-    if hmat.ndim != 4 or hmat.shape[0] != hmat.shape[2] or hmat.shape[1] != hmat.shape[3]:
-        raise ValueError("hmat must be a 4D array with shape (K, L, K, L)")
-    if smat.ndim != 4 or smat.shape[0] != smat.shape[2] or smat.shape[1] != smat.shape[3]:
-        raise ValueError("smat must be a 4D array with shape (K, L, K, L)")
-    K, L, _, _ = hmat.shape
-    if K <= 0 or L <= 0:
-        raise ValueError("hmat must have positive dimensions")
-    if smat.shape != (K, L, K, L):
+    for name, array in (("hmat", hmat), ("smat", smat)):
+        if not isinstance(array, np.ndarray):
+            raise TypeError(f"{name} must be a NumPy array")
+        if array.ndim not in (4, 6):
+            raise ValueError(f"{name} must be a four- or six-index kernel")
+        half = array.ndim // 2
+        if (any(size == 0 for size in array.shape)
+                or array.shape[:half] != array.shape[half:]):
+            raise ValueError(f"{name} must have matching nonempty bra and ket shapes")
+        if array.dtype != np.float64:
+            raise TypeError(f"{name} must have float64 dtype")
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must contain only finite values")
+    if smat.shape != hmat.shape:
         raise ValueError("smat must have the same shape as hmat")
-    if hmat.dtype != np.float64 or smat.dtype != np.float64:
-        raise TypeError("hmat and smat must have float64 dtype")
-    if not np.all(np.isfinite(hmat)) or not np.all(np.isfinite(smat)):
-        raise ValueError("hmat and smat must contain only finite values")
-    if not np.isfinite(overlap_cut) or not np.isreal(overlap_cut) or overlap_cut <= 0:
+    if (isinstance(overlap_cut, (bool, np.bool_))
+            or not isinstance(overlap_cut, (int, float, np.integer, np.floating))
+            or not np.isfinite(overlap_cut) or overlap_cut <= 0):
         raise ValueError("overlap_cut must be finite, real, and positive")
-    hmat_flat = hmat.reshape(K*L, K*L)
-    smat_flat = smat.reshape(K*L, K*L)
-    if not np.array_equal(hmat_flat, hmat_flat.T) or not np.array_equal(smat_flat, smat_flat.T):
+
+    basis_shape = hmat.shape[:hmat.ndim // 2]
+    dimension = int(np.prod(basis_shape))
+    hmat_flat = hmat.reshape(dimension, dimension)
+    smat_flat = smat.reshape(dimension, dimension)
+    if (not np.array_equal(hmat_flat, hmat_flat.T)
+            or not np.array_equal(smat_flat, smat_flat.T)):
         raise ValueError("hmat and smat must be symmetric")
-    s, V = np.linalg.eigh(smat_flat)
-    tau = max(np.max(s), 1) * overlap_cut
-    if np.min(s) < -tau:
+
+    s, vectors = np.linalg.eigh(smat_flat)
+    threshold = max(float(s[-1]), 1.0) * overlap_cut
+    if s[0] < -threshold:
         raise ValueError("smat has eigenvalues below the allowed overlap_cut threshold")
-    s_keep = s > tau
-    if not np.any(s_keep):
+    keep = s > threshold
+    if not np.any(keep):
         raise ValueError("No eigenvalues of smat are above the allowed overlap_cut threshold")
-    X = np.zeros((K*L, np.sum(s_keep)), dtype=np.float64)
-    X[:,:] = V[:, s_keep] / np.sqrt(s[s_keep])
-    energy, y = np.linalg.eigh(X.T @ hmat_flat @ X)
-    C = X @ y
-    rank = C.shape[1]
-    return energy[0], C[:, 0].reshape(K, L), rank
+    X = vectors[:, keep] / np.sqrt(s[keep])
+    energies, eigenvectors = np.linalg.eigh(X.T @ hmat_flat @ X)
+    coeff = (X @ eigenvectors[:, 0]).reshape(basis_shape)
+    return float(energies[0]), coeff, int(np.count_nonzero(keep))
 
 
 def lf_translation_orbit(
@@ -692,4 +706,139 @@ def lf_multi_frame_overlap(
     kernel will use the same conditional coherent displacements.
     """
     nframe, nsite = _validate_multi_frame_inputs(lam, shift, nelec)
-    raise NotImplementedError("Student task pending: implement the LF-MR overlap")
+    str_a, _ = my_direct_ep.make_electron_basis(nsite, nelec[0])
+    str_b, _ = my_direct_ep.make_electron_basis(nsite, nelec[1])
+
+    sites = np.arange(nsite, dtype=np.int64)
+
+    occ_a = ((str_a[:, None] >> sites[None, :] & 1).astype(np.float64))
+    occ_b = ((str_b[:, None] >> sites[None, :] & 1).astype(np.float64))
+    occupation = occ_a[:, None, :] + occ_b[None, :, :]
+
+    eta = shift[:, None, None, :] - np.einsum("Axp,ijp->Aijx", lam, occupation)
+
+    difference = eta[:, None, :, :, :] - eta[None, :, :, :, :]
+    same_det_overlap = np.exp(-0.5 * np.sum(difference**2, axis=-1))
+    identity_a = np.eye(len(str_a), dtype=np.float64)
+    identity_b = np.eye(len(str_b), dtype=np.float64)
+
+    smat = np.einsum("ABij,ik,jl->AijBkl", same_det_overlap, identity_a, identity_b)
+    return smat
+
+
+def lf_multi_frame_hamiltonian(
+    tmat: np.ndarray,
+    U: float,
+    g: float,
+    omega: float,
+    lam: np.ndarray,
+    shift: np.ndarray,
+    nelec: tuple[int, int],
+) -> np.ndarray:
+    """Return the physical Hamiltonian kernel between multi-electron LF frames.
+
+    Uses the uncentered coupling g*n[x]*(b[x] + b[x].dagger), local Hubbard
+    interaction U*n_alpha[x]*n_beta[x], and omega*b[x].dagger*b[x] without
+    a zero-point constant. The result already uses the paper energy
+    convention; no centered-to-paper energy correction is added.
+
+    Parameters
+    ----------
+    tmat
+        Finite float64 hopping matrix with shape (L, L), indexed by
+        electron sites [p, q]. Must be exactly symmetric; diagonal entries
+        are allowed. No particular lattice or boundary condition is assumed.
+    U, g, omega
+        Finite real interaction, electron-phonon coupling, and positive
+        common phonon frequency.
+    lam
+        Finite float64 LF matrices with shape (K, L, L) and index order
+        [frame A, phonon mode x, electron site p].
+    shift
+        Finite float64 coherent shifts with shape (K, L), ordered [A, x].
+    nelec
+        Fixed electron counts (neleca, nelecb), each between zero and L.
+
+    Returns
+    -------
+    numpy.ndarray
+        Float64 tensor of shape (K, nstra, nstrb, K, nstra, nstrb), ordered
+        [A, ia, ib, B, ja, jb], matching lf_multi_frame_overlap. Electronic
+        determinant addresses use my_direct_ep.make_electron_basis order.
+
+    Notes
+    -----
+    Each basis ket is a site determinant times its conditional normalized
+    coherent state. Coherent-state matrix elements are evaluated in the
+    complete phonon space, so there is no Nmax parameter. Hopping changes
+    the electron determinant: its coherent overlap must be retained even
+    when the full state overlap from lf_multi_frame_overlap is zero.
+    The resulting frame space is variational and need not span the exact
+    electron-phonon ground state.
+    """
+    nframe, nsite = _validate_multi_frame_inputs(lam, shift, nelec)
+    if not isinstance(tmat, np.ndarray) or tmat.shape != (nsite, nsite):
+        raise ValueError("tmat must have shape (L, L)")
+    if tmat.dtype != np.float64:
+        raise TypeError("tmat must have float64 dtype")
+    if not np.all(np.isfinite(tmat)):
+        raise ValueError("tmat must contain only finite values")
+    if not np.array_equal(tmat, tmat.T):
+        raise ValueError("tmat must be symmetric")
+    for name, value in (("U", U), ("g", g), ("omega", omega)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value)):
+            raise ValueError(f"{name} must be a finite real scalar")
+    if omega <= 0:
+        raise ValueError("omega must be positive")
+    str_a, link_a = my_direct_ep.make_electron_basis(nsite, nelec[0])
+    str_b, link_b = my_direct_ep.make_electron_basis(nsite, nelec[1])
+
+    sites = np.arange(nsite, dtype=np.int64)
+
+    occ_a = ((str_a[:, None] >> sites[None, :] & 1).astype(np.float64))
+    occ_b = ((str_b[:, None] >> sites[None, :] & 1).astype(np.float64))
+    occupation = occ_a[:, None, :] + occ_b[None, :, :]
+
+    eta = shift[:, None, None, :] - np.einsum("Axp,ijp->Aijx", lam, occupation)
+
+    double_occ = occ_a @ occ_b.T
+
+    create, annihilate, target, sign = link_a.transpose(2, 0, 1)
+    source = np.broadcast_to(np.arange(len(str_a))[:, None], target.shape)
+    hopping_a = np.zeros((len(str_a), len(str_a)))
+    np.add.at(hopping_a, (target, source), sign * tmat[create, annihilate])
+
+    create, annihilate, target, sign = link_b.transpose(2, 0, 1)
+    source = np.broadcast_to(np.arange(len(str_b))[:, None], target.shape)
+    hopping_b = np.zeros((len(str_b), len(str_b)))
+    np.add.at(hopping_b, (target, source), sign * tmat[create, annihilate])
+
+    identity_a = np.eye(len(str_a))
+    identity_b = np.eye(len(str_b))
+    hopping = (
+        np.einsum("ik,jl->ijkl", hopping_a, identity_b)
+        + np.einsum("ik,jl->ijkl", identity_a, hopping_b)
+    )
+
+    eta_dot = np.einsum("Aijx,Bklx->AijBkl", eta, eta)
+    eta_norm2 = np.sum(eta**2, axis=-1)
+
+    distance2 = (
+        eta_norm2[:, :, :, None, None, None]
+        + eta_norm2[None, None, None, :, :, :]
+        - 2 * eta_dot
+    )
+    G = np.exp(-0.5 * distance2)
+    H_hop = hopping[None, :, :, None, :, :] * G
+    same_eta_dot = np.einsum("Aijx,Bijx->ABij", eta, eta)
+    density_eta = np.einsum("ijx,Aijx->Aij", occupation, eta)
+    V = (
+        U * double_occ
+        + omega * same_eta_dot
+        + g * (density_eta[:, None, :, :] + density_eta[None, :, :, :])
+    )
+    diagonal_tensor = np.einsum("ABij,ik,jl->AijBkl", V, identity_a, identity_b)
+    smat = lf_multi_frame_overlap(lam, shift, nelec)
+    return H_hop + diagonal_tensor * smat
