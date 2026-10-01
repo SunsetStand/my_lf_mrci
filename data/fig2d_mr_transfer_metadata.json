@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "data/fig2d_exact.csv": "9539331ff69c681c3d5b39ba0383f96b84eef9872b7d2628abcc892bb1bd8026",
+    "data/fig2d_lf_references.npz": "ef3ebbf72e0b1bf07b0cfff65321e940607657c7833bc856909ccd11197eb831",
+    "data/fig2d_mr.csv": "07d4f32207beb9899169ab58bdc10cb3a084e19a5e59fc37ebb73e1a7a4dcde5",
+    "src/lf_mr.py": "69acb0df29cf0913d5173e65d7a4c26277d9d3c9d7fa5e0926b7e795c3bdea2f",
+    "scripts/fig2d_mr_scan.py": "dc4864933e3d1c25dc67e5a7d4b6b2adcdcedcd0fc8983656671a730e1f29a2c",
+    "scripts/fig2d_mr_transfer_scan.py": "7194ae7a8b270259025f6aa173b599a9016952efcc031c26bc9d92d701ee1c29"
+  },
+  "frame_recipe": "baseline plus same-frequency alpha=0/4 HF orbits; alpha=0.4 control",
+  "transfer": "raw lambda and z; no rescaling; target Hamiltonian; full CI reoptimized",
+  "nonlinear_frames_optimized": false,
+  "frame_converged": false,
+  "ed_recomputed": false,
+  "max_projected_residual": 1.7580176379060108e-12,
+  "max_cutoff_energy_spread": 0.0,
+  "min_energy_gain": -9.592326932761353e-14
+}
