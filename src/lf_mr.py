@@ -842,3 +842,88 @@ def lf_multi_frame_hamiltonian(
     diagonal_tensor = np.einsum("ABij,ik,jl->AijBkl", V, identity_a, identity_b)
     smat = lf_multi_frame_overlap(lam, shift, nelec)
     return H_hop + diagonal_tensor * smat
+
+
+def lf_translation_projected_noci(
+    tmat, U, g, omega, lam, shift, nelec, *, character=1,
+    electronic_coeff=None, overlap_cut=1e-10,
+):
+    """Solve NOCI between translation-projected LF frame families.
+
+    lam: float64 (F,L,L), shift: float64 (F,L), in existing kernel order.
+    nelec: (na,nb). Each seed generates L translated frames. Translation
+    moves site p to (p+R)%L and reorders each spin determinant with its
+    fermionic sign. character=+1 projects to momentum zero; -1 projects
+    to momentum pi and requires even L. Other momenta are not implemented.
+
+    Normally all electronic configurations remain independent: projected
+    coefficients have shape (F,nstra,nstrb). Optional finite float64
+    electronic_coeff of that same shape fixes one electronic wavefunction
+    per seed, giving one projected state per seed and coefficients (F,).
+    No normalization of individual projected states is assumed; S supplies
+    the physical metric. A projected state may vanish and is rank truncated.
+
+    Returns a dict with energy, rank, coeff, expanded_coeff (F*L,na,nb),
+    lam/shift for the full orbit, projection P (D,M), projected hmat/smat
+    (M,M), norm_error and residual_projected. H/S are built with existing
+    multi kernels and solved by lf_noci_lowest after roundoff symmetrization.
+    D=F*L*nstra*nstrb. Inputs are not modified. Translation-invariant tmat
+    is required. This is projection of wavefunctions, not averaging lambda.
+    """
+    F, L = _validate_multi_frame_inputs(lam, shift, nelec)
+    if (isinstance(character, (bool, np.bool_))
+            or not isinstance(character, (int, np.integer)) or character not in (1, -1)):
+        raise ValueError('character must be +1 or -1')
+    if character == -1 and L % 2:
+        raise ValueError('character=-1 requires even L')
+    if (not isinstance(tmat, np.ndarray) or tmat.shape != (L, L)
+            or not np.allclose(tmat, np.roll(tmat, 1, axis=(0, 1)), atol=1e-12, rtol=0)):
+        raise ValueError('tmat must be invariant under a one-site translation')
+    strings = [my_direct_ep.make_electron_basis(L, n)[0] for n in nelec]
+    na, nb = map(len, strings)
+    maps, signs = [], []
+    for spin_strings, n in zip(strings, nelec):
+        occ = ((spin_strings[:, None] >> np.arange(L)) & 1)
+        mask = (1 << L)-1
+        shifted = np.stack([((spin_strings << R) & mask) | (spin_strings >> (L-R))
+                            for R in range(L)])
+        maps.append(np.searchsorted(spin_strings, shifted))
+        wraps = np.stack([occ[:, L-R:].sum(axis=1) if R else np.zeros(len(occ), dtype=int)
+                          for R in range(L)])
+        signs.append(np.where((wraps*(n-wraps)) % 2, -1.0, 1.0))
+    orbit = [lf_translation_orbit(lam[A], shift[A]) for A in range(F)]
+    orbit_lam = np.concatenate([o[0] for o in orbit])
+    orbit_shift = np.concatenate([o[1] for o in orbit])
+    d = na*nb
+    P = np.zeros((F*L*d, F*d), dtype=np.float64)
+    address = (maps[0][:, :, None]*nb + maps[1][:, None, :]).reshape(L, d)
+    sign = (signs[0][:, :, None]*signs[1][:, None, :]).reshape(L, d)
+    for A in range(F):
+        rows = (A*L+np.arange(L)[:, None])*d + address
+        P[rows, A*d+np.arange(d)[None, :]] = (character**np.arange(L))[:, None]*sign/np.sqrt(L)
+    shape = (F, na, nb)
+    if electronic_coeff is not None:
+        if (not isinstance(electronic_coeff, np.ndarray) or electronic_coeff.shape != shape
+                or electronic_coeff.dtype != np.float64
+                or not np.all(np.isfinite(electronic_coeff))):
+            raise ValueError('electronic_coeff must be finite float64 (F,nstra,nstrb)')
+        Q = np.zeros((F*d, F))
+        Q[np.arange(F*d), np.repeat(np.arange(F), d)] = electronic_coeff.ravel()
+        P = P @ Q
+        shape = (F,)
+    H = lf_multi_frame_hamiltonian(tmat, U, g, omega, orbit_lam, orbit_shift, nelec)
+    S = lf_multi_frame_overlap(orbit_lam, orbit_shift, nelec)
+    h = P.T @ H.reshape(F*L*d, F*L*d) @ P
+    s = P.T @ S.reshape(F*L*d, F*L*d) @ P
+    h, s = (h+h.T)/2, (s+s.T)/2
+    M = len(h)
+    energy, c, rank = lf_noci_lowest(h.reshape(M, 1, M, 1), s.reshape(M, 1, M, 1), overlap_cut=overlap_cut)
+    c = c.ravel()
+    eig, v = np.linalg.eigh(s)
+    keep = eig > overlap_cut*max(1.0, eig[-1])
+    X = v[:, keep]/np.sqrt(eig[keep])
+    return dict(energy=energy, rank=rank, coeff=c.reshape(shape),
+                expanded_coeff=(P@c).reshape(F*L, na, nb),
+                lam=orbit_lam, shift=orbit_shift, projection=P, hmat=h, smat=s,
+                norm_error=float(abs(c@s@c-1)),
+                residual_projected=float(np.linalg.norm(X.T@(h@c-energy*s@c))))

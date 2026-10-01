@@ -1,0 +1,17 @@
+{
+  "source_sha256": {
+    "src/lf_mr.py": "ce4e775258b8a49ae37b5ef48e95abbdf93dfee0aac1a477367a6af9cb0fe880",
+    "scripts/fig2d_mr_projected_scan.py": "6292e2d62668a4b40709000f8a8aa338bf05dbc9b9b538c43f4f7c484d6dd257",
+    "data/fig2d_mr.csv": "07d4f32207beb9899169ab58bdc10cb3a084e19a5e59fc37ebb73e1a7a4dcde5",
+    "data/fig2d_exact.csv": "9539331ff69c681c3d5b39ba0383f96b84eef9872b7d2628abcc892bb1bd8026",
+    "data/fig2d_lf_references.npz": "ef3ebbf72e0b1bf07b0cfff65321e940607657c7833bc856909ccd11197eb831"
+  },
+  "cs_start": "converged g=0 UHF orbitals (uniform charge, staggered spin); uniform CS phonons",
+  "cs_start_failures": [],
+  "nonlinear_mr_optimized": false,
+  "frame_converged": false,
+  "ed_recomputed": false,
+  "sectors": "q=+1 equal weight; q=-1 alternating sign, both include fermionic signs",
+  "path": "target CS-start LF-HF lambda,z to same-omega alpha=4 lambda,z; raw linear interpolation",
+  "max_cutoff_spread": 0.002427578860366708
+}
