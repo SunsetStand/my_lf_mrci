@@ -846,7 +846,8 @@ def lf_multi_frame_hamiltonian(
 
 def lf_translation_projected_noci(
     tmat, U, g, omega, lam, shift, nelec, *, character=1,
-    electronic_coeff=None, overlap_cut=1e-10,
+    electronic_coeff=None, overlap_cut=1e-10, backend="direct",
+    return_projection=False,
 ):
     """Solve NOCI between translation-projected LF frame families.
 
@@ -864,10 +865,16 @@ def lf_translation_projected_noci(
     the physical metric. A projected state may vanish and is rank truncated.
 
     Returns a dict with energy, rank, coeff, expanded_coeff (F*L,na,nb),
-    lam/shift for the full orbit, projection P (D,M), projected hmat/smat
+    lam/shift for the full orbit, optional projection P (D,M), projected hmat/smat
     (M,M), norm_error and residual_projected. H/S are built with existing
-    multi kernels and solved by lf_noci_lowest after roundoff symmetrization.
-    D=F*L*nstra*nstrb. Inputs are not modified. Translation-invariant tmat
+    multi kernels (backend="full") or relative translations (default
+    backend="direct"), then solved by lf_noci_lowest. The direct backend
+    never builds full orbit H/S. projection is None unless return_projection
+    is True; expanded_coeff is constructed without a dense P. Both backends
+    use the same roundoff symmetrization and overlap cutoff.
+    D=F*L*nstra*nstrb. With full electronic CI, the direct path stores
+    O((F*nstra*nstrb)**2) matrix elements; the full path stores
+    O((F*L*nstra*nstrb)**2). Inputs are not modified. Translation-invariant tmat
     is required. This is projection of wavefunctions, not averaging lambda.
     """
     F, L = _validate_multi_frame_inputs(lam, shift, nelec)
@@ -895,26 +902,38 @@ def lf_translation_projected_noci(
     orbit_lam = np.concatenate([o[0] for o in orbit])
     orbit_shift = np.concatenate([o[1] for o in orbit])
     d = na*nb
-    P = np.zeros((F*L*d, F*d), dtype=np.float64)
+    if backend not in ("direct", "full"):
+        raise ValueError('backend must be direct or full')
+    if not isinstance(return_projection, (bool, np.bool_)):
+        raise TypeError('return_projection must be boolean')
     address = (maps[0][:, :, None]*nb + maps[1][:, None, :]).reshape(L, d)
     sign = (signs[0][:, :, None]*signs[1][:, None, :]).reshape(L, d)
-    for A in range(F):
-        rows = (A*L+np.arange(L)[:, None])*d + address
-        P[rows, A*d+np.arange(d)[None, :]] = (character**np.arange(L))[:, None]*sign/np.sqrt(L)
     shape = (F, na, nb)
     if electronic_coeff is not None:
         if (not isinstance(electronic_coeff, np.ndarray) or electronic_coeff.shape != shape
                 or electronic_coeff.dtype != np.float64
                 or not np.all(np.isfinite(electronic_coeff))):
             raise ValueError('electronic_coeff must be finite float64 (F,nstra,nstrb)')
-        Q = np.zeros((F*d, F))
-        Q[np.arange(F*d), np.repeat(np.arange(F), d)] = electronic_coeff.ravel()
-        P = P @ Q
         shape = (F,)
-    H = lf_multi_frame_hamiltonian(tmat, U, g, omega, orbit_lam, orbit_shift, nelec)
-    S = lf_multi_frame_overlap(orbit_lam, orbit_shift, nelec)
-    h = P.T @ H.reshape(F*L*d, F*L*d) @ P
-    s = P.T @ S.reshape(F*L*d, F*L*d) @ P
+    P = None
+    if backend == "full" or return_projection:
+        P = np.zeros((F*L*d, F*d), dtype=np.float64)
+        for A in range(F):
+            rows = (A*L+np.arange(L)[:, None])*d + address
+            P[rows, A*d+np.arange(d)[None, :]] = (character**np.arange(L))[:, None]*sign/np.sqrt(L)
+        if electronic_coeff is not None:
+            Q = np.zeros((F*d, F))
+            Q[np.arange(F*d), np.repeat(np.arange(F), d)] = electronic_coeff.ravel()
+            P = P @ Q
+    if backend == "full":
+        H = lf_multi_frame_hamiltonian(tmat, U, g, omega, orbit_lam, orbit_shift, nelec)
+        S = lf_multi_frame_overlap(orbit_lam, orbit_shift, nelec)
+        h = P.T @ H.reshape(F*L*d, F*L*d) @ P
+        s = P.T @ S.reshape(F*L*d, F*L*d) @ P
+    else:
+        h, s = _lf_relative_translation_kernels(
+            tmat, U, g, omega, lam, shift, nelec, address, sign,
+            character, electronic_coeff)
     h, s = (h+h.T)/2, (s+s.T)/2
     M = len(h)
     energy, c, rank = lf_noci_lowest(h.reshape(M, 1, M, 1), s.reshape(M, 1, M, 1), overlap_cut=overlap_cut)
@@ -922,8 +941,69 @@ def lf_translation_projected_noci(
     eig, v = np.linalg.eigh(s)
     keep = eig > overlap_cut*max(1.0, eig[-1])
     X = v[:, keep]/np.sqrt(eig[keep])
+    seed_coeff = (c.reshape(F, d) if electronic_coeff is None
+                  else c[:, None]*electronic_coeff.reshape(F, d))
+    expanded = np.empty((F, L, d), dtype=np.float64)
+    for R in range(L):
+        expanded[:, R, address[R]] = seed_coeff*(character**R)*sign[R]/np.sqrt(L)
     return dict(energy=energy, rank=rank, coeff=c.reshape(shape),
-                expanded_coeff=(P@c).reshape(F*L, na, nb),
-                lam=orbit_lam, shift=orbit_shift, projection=P, hmat=h, smat=s,
+                expanded_coeff=expanded.reshape(F*L, na, nb),
+                lam=orbit_lam, shift=orbit_shift,
+                projection=P if return_projection else None, hmat=h, smat=s,
                 norm_error=float(abs(c@s@c-1)),
                 residual_projected=float(np.linalg.norm(X.T@(h@c-energy*s@c))))
+
+
+
+def _lf_relative_translation_kernels(
+    tmat, U, g, omega, lam, shift, nelec, address, sign, character, electronic_coeff,
+):
+    """Accumulate projected matrices one relative translation at a time.
+
+    Matrix boundary indices are (seed, alpha address, beta address), C order.
+    All arrays are real float64. A block has shape (F,d,F,d), d=na*nb;
+    the full (F*L*d)**2 orbit matrices are never allocated. Fixed-electronic
+    states are contracted per translation to (F,F) before accumulation.
+    Physical matrix elements are identical to lf_multi_frame_hamiltonian.
+    """
+    F, L, _ = lam.shape
+    # Reuse all physical input validation on a single seed (small d x d).
+    lf_multi_frame_hamiltonian(tmat, U, g, omega, lam[:1], shift[:1], nelec)
+    bases = [my_direct_ep.make_electron_basis(L, n) for n in nelec]
+    occ = [((ss[:, None] >> np.arange(L)) & 1).astype(np.float64) for ss, _ in bases]
+    occupation = (occ[0][:, None, :] + occ[1][None, :, :]).reshape(-1, L)
+    double = (occ[0] @ occ[1].T).ravel()
+    d = len(occupation)
+    hops = []
+    for ss, link in bases:
+        create, annihilate, target, parity = link.transpose(2, 0, 1)
+        source = np.broadcast_to(np.arange(len(ss))[:, None], target.shape)
+        hop = np.zeros((len(ss), len(ss)))
+        np.add.at(hop, (target, source), parity*tmat[create, annihilate])
+        hops.append(hop)
+    hopping = np.kron(hops[0], np.eye(len(occ[1]))) + np.kron(np.eye(len(occ[0])), hops[1])
+    eta = shift[:, None, :] - np.einsum('Axp,ip->Aix', lam, occupation)
+    norms = np.sum(eta**2, axis=-1)
+    density_eta = np.einsum('ix,Aix->Ai', occupation, eta)
+    size = F*d if electronic_coeff is None else F
+    h, s = np.zeros((size, size)), np.zeros((size, size))
+    fixed = None if electronic_coeff is None else electronic_coeff.reshape(F, d)
+    for R in range(L):
+        ket_eta = np.roll(eta, R, axis=-1)
+        dot = np.einsum('Aix,Bjx->AiBj', eta, ket_eta)
+        gaussian = np.exp(-.5*(norms[:, :, None, None]+norms[None, None, :, :]-2*dot))
+        electronic_overlap = np.eye(d)[:, address[R]]
+        weight = (character**R)*sign[R]
+        overlap = gaussian*electronic_overlap[None, :, None, :]*weight[None, None, None, :]
+        potential = (U*double[None, :, None, None] + omega*dot
+                     + g*(density_eta[:, :, None, None]
+                          + np.einsum('ix,Bjx->iBj', occupation, ket_eta)[None]))
+        ham = (gaussian*hopping[:, address[R]][None, :, None, :]*weight[None, None, None, :]
+               + potential*overlap)
+        if fixed is None:
+            h += ham.reshape(size, size)
+            s += overlap.reshape(size, size)
+        else:
+            h += np.einsum('Ai,AiBj,Bj->AB', fixed, ham, fixed, optimize=True)
+            s += np.einsum('Ai,AiBj,Bj->AB', fixed, overlap, fixed, optimize=True)
+    return h, s

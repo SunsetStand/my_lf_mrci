@@ -9,7 +9,7 @@ def test_translation_signs_against_slater_minors(L, nelec):
     rng=np.random.default_rng(24)
     lam=rng.normal(size=(1,L,L))*.1
     out=mr.lf_translation_projected_noci(-(np.roll(np.eye(L),1,axis=0)+np.roll(np.eye(L),-1,axis=0)), 2., .3, 1.,
-                                        lam, np.zeros((1,L)), nelec)
+                                        lam, np.zeros((1,L)), nelec, return_projection=True)
     strings=[ep.make_electron_basis(L,n)[0] for n in nelec]
     occupied=[[np.flatnonzero((int(s)>>np.arange(L))&1) for s in ss] for ss in strings]
     d=len(strings[0])*len(strings[1])
