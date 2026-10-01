@@ -1,0 +1,21 @@
+{
+  "frame_recipe": "selected_HF_translation_orbit_plus_uniform_CS;full_site_CI_per_frame",
+  "source_sha256": {
+    "data/fig2d_exact.csv": "9539331ff69c681c3d5b39ba0383f96b84eef9872b7d2628abcc892bb1bd8026",
+    "data/fig2d_lf.csv": "0cecce4ed5136fbce1c3fdd75b2722bc55b6c59bc84e9089ed61b919c79c41f2",
+    "data/fig2d_lf_references.npz": "ef3ebbf72e0b1bf07b0cfff65321e940607657c7833bc856909ccd11197eb831",
+    "src/lf_mr.py": "69acb0df29cf0913d5173e65d7a4c26277d9d3c9d7fa5e0926b7e795c3bdea2f",
+    "src/lf_mp.py": "4c056cd472f9e7c0f812fd7ba99bb81409b030e4403d2f54ca7cb09c8eb930f3",
+    "scripts/fig2d_mr_scan.py": "dc4864933e3d1c25dc67e5a7d4b6b2adcdcedcd0fc8983656671a730e1f29a2c"
+  },
+  "ed_recomputed": false,
+  "ed_validation": "Stored converged ED; parameters, shift and residual audited",
+  "mp2_plotted": "Original max_total=8, max_excited_modes=2; recomputed and checked against 12/all modes",
+  "mr_frame_converged": false,
+  "mr_frame_note": "Fixed five frames, no optimization of MR energy; one-frame/orbit comparisons recorded",
+  "density_note": "Raw lowest eigenvector density; gap <1e-8 flagged as basis dependent",
+  "density_formulas": "w_ij=sum_A C_Aij*(S C)_Aij; rho_alpha=sum_ij w_ij occ_alpha_ip; beta analog",
+  "max_mp2_sum_change": 3.7322769559366975e-05,
+  "max_projected_residual": 3.0516037220054277e-13,
+  "max_overlap_cutoff_spread": 0.0
+}
